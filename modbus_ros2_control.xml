@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<library path="modbus_ros2_control">
+    <class name="modbus_ros2_control/ModbusHardware"
+           type="modbus_ros2_control::ModbusHardware"
+           base_class_type="hardware_interface::SystemInterface">
+        <description>
+            Modbus ROS2 Control Hardware Interface
+            Supports multiple Modbus-based end effectors (grippers, etc.) with different protocols.
+            Currently supports: Changingtek gripper
+        </description>
+    </class>
+</library>
+
