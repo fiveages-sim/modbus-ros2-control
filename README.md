@@ -13,6 +13,7 @@ ModbusGripperBase (抽象基类)
 ```
 
 ## Build
+
 * Install libmodbus-dev
     ```bash
     sudo apt-get install libmodbus-dev 
@@ -40,22 +41,22 @@ modbus_ros2_control/
 ### 核心组件
 
 1. **communicator/ModbusRtuCommunicator** - Modbus RTU 通信封装类
-   - 封装 libmodbus 的底层通信
-   - 提供统一的读写接口
+    - 封装 libmodbus 的底层通信
+    - 提供统一的读写接口
 
 2. **grippers/ModbusGripperBase** - 夹爪抽象基类
-   - 定义统一的接口（初始化、读取、写入）
-   - 提供 ROS2 Control 接口导出功能
-   - 位置归一化（0.0=闭合，1.0=打开）
+    - 定义统一的接口（初始化、读取、写入）
+    - 提供 ROS2 Control 接口导出功能
+    - 位置归一化（0.0=闭合，1.0=打开）
 
 3. **grippers/ChangingtekGripper** - Changingtek 夹爪具体实现
-   - 实现 Changingtek 特定的 Modbus 协议
-   - 位置范围：0-9000（0=打开，9000=闭合）
+    - 实现 Changingtek 特定的 Modbus 协议
+    - 位置范围：0-9000（0=打开，9000=闭合）
 
 4. **hardware/ModbusHardware** - ROS2 Control 硬件接口
-   - 管理 Modbus 连接
-   - 创建和初始化夹爪对象
-   - 实现 ROS2 Control 生命周期
+    - 管理 Modbus 连接
+    - 创建和初始化夹爪对象
+    - 实现 ROS2 Control 生命周期
 
 ## 使用方法
 
@@ -87,12 +88,14 @@ modbus_ros2_control/
 ### 2. 配置参数说明
 
 #### 必需参数
+
 - `gripper_type`: 夹爪类型（当前支持 "changingtek"）
-  - 根据此参数会自动配置默认的 Modbus 参数
+    - 根据此参数会自动配置默认的 Modbus 参数
 
 #### 可选参数（会根据 `gripper_type` 自动设置默认值，可手动覆盖）
 
 **Changingtek 夹爪默认值**：
+
 - `serial_port`: `/dev/ttyUSB0`
 - `baudrate`: `115200`
 - `slave_id`: `1`
@@ -105,12 +108,12 @@ modbus_ros2_control/
 ### 3. 位置单位
 
 - **ROS2 Control 接口**：归一化值 0.0-1.0
-  - 0.0 = 完全闭合
-  - 1.0 = 完全打开
+    - 0.0 = 完全闭合
+    - 1.0 = 完全打开
 
 - **Changingtek 协议**：0-9000（单位：mm）
-  - 0 = 完全打开
-  - 9000 = 完全闭合
+    - 0 = 完全打开
+    - 9000 = 完全闭合
 
 转换由 `ChangingtekGripper` 自动处理。
 

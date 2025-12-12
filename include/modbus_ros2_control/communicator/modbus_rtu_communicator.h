@@ -2,8 +2,6 @@
 
 #include <modbus/modbus.h>
 #include <string>
-#include <memory>
-#include <cstdint>
 
 namespace modbus_ros2_control {
 

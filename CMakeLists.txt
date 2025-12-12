@@ -14,6 +14,7 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
         pluginlib
         rclcpp
         rclcpp_lifecycle
+        gripper_hardware_common
 )
 
 find_package(ament_cmake REQUIRED)

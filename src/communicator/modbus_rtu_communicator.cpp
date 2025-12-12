@@ -1,6 +1,7 @@
 #include "modbus_ros2_control/communicator/modbus_rtu_communicator.h"
 #include <cerrno>
 #include <cstring>
+#include <sys/time.h>
 
 namespace modbus_ros2_control {
 
@@ -47,6 +48,19 @@ bool ModbusRtuCommunicator::connect() {
 
     // 设置调试模式（默认关闭）
     modbus_set_debug(modbus_ctx_, 0);
+
+    // 设置超时时间（响应超时和字节超时）
+    // 响应超时：500ms（等待响应的最大时间）
+    // 字节超时：100ms（两个字节之间的最大间隔时间）
+    struct timeval response_timeout;
+    response_timeout.tv_sec = 0;
+    response_timeout.tv_usec = 500000; // 500ms
+    modbus_set_response_timeout(modbus_ctx_, response_timeout.tv_sec, response_timeout.tv_usec);
+
+    struct timeval byte_timeout;
+    byte_timeout.tv_sec = 0;
+    byte_timeout.tv_usec = 100000; // 100ms
+    modbus_set_byte_timeout(modbus_ctx_, byte_timeout.tv_sec, byte_timeout.tv_usec);
 
     // 设置从站地址
     if (modbus_set_slave(modbus_ctx_, slave_id_) == -1) {
