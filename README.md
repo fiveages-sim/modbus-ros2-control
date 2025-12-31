@@ -60,7 +60,9 @@ modbus_ros2_control/
 
 ## 使用方法
 
-### 1. 在 URDF 中配置
+### 1. Changingtek 夹爪配置
+
+#### 在 URDF 中配置
 
 ```xml
 <ros2_control name="ModbusGripperSystem" type="system">
@@ -68,6 +70,9 @@ modbus_ros2_control/
     <plugin>modbus_ros2_control/ModbusHardware</plugin>
     <!-- 只需指定 gripper_type，其他参数会自动配置 -->
     <param name="gripper_type">changingtek</param>
+    
+    <!-- 可选：指定变体 (90c 或 90d) -->
+    <param name="variant">90c</param>
     
     <!-- 如果需要覆盖默认值，可以显式指定 -->
     <!-- <param name="serial_port">/dev/ttyUSB1</param> -->
@@ -85,37 +90,290 @@ modbus_ros2_control/
 </ros2_control>
 ```
 
-### 2. 配置参数说明
+### 2. O7 灵巧手配置
 
-#### 必需参数
+#### 在 URDF 中配置
 
-- `gripper_type`: 夹爪类型（当前支持 "changingtek"）
-    - 根据此参数会自动配置默认的 Modbus 参数
+```xml
+<ros2_control name="DexterousHandSystem" type="system">
+  <hardware>
+    <plugin>modbus_ros2_control/DexterousHandHardware</plugin>
+    <!-- 串口路径 -->
+    <param name="serial_port">/dev/ttyUSB0</param>
+    <!-- 手部：left 或 right (默认: right) -->
+    <param name="hand_side">right</param>
+  </hardware>
+  
+  <!-- 7个关节：拇指弯曲、拇指横摆、食指、中指、无名指、小指、拇指横滚 -->
+  <joint name="thumb_pitch">
+    <command_interface name="position"/>
+    <state_interface name="position"/>
+    <state_interface name="velocity"/>
+    <state_interface name="effort"/>
+  </joint>
+  
+  <joint name="thumb_yaw">
+    <command_interface name="position"/>
+    <state_interface name="position"/>
+    <state_interface name="velocity"/>
+    <state_interface name="effort"/>
+  </joint>
+  
+  <joint name="index_pitch">
+    <command_interface name="position"/>
+    <state_interface name="position"/>
+    <state_interface name="velocity"/>
+    <state_interface name="effort"/>
+  </joint>
+  
+  <joint name="middle_pitch">
+    <command_interface name="position"/>
+    <state_interface name="position"/>
+    <state_interface name="velocity"/>
+    <state_interface name="effort"/>
+  </joint>
+  
+  <joint name="ring_pitch">
+    <command_interface name="position"/>
+    <state_interface name="position"/>
+    <state_interface name="velocity"/>
+    <state_interface name="effort"/>
+  </joint>
+  
+  <joint name="little_pitch">
+    <command_interface name="position"/>
+    <state_interface name="position"/>
+    <state_interface name="velocity"/>
+    <state_interface name="effort"/>
+  </joint>
+  
+  <joint name="thumb_roll">
+    <command_interface name="position"/>
+    <state_interface name="position"/>
+    <state_interface name="velocity"/>
+    <state_interface name="effort"/>
+  </joint>
+</ros2_control>
+```
 
-#### 可选参数（会根据 `gripper_type` 自动设置默认值，可手动覆盖）
+#### 使用 Xacro 宏（推荐）
 
-**Changingtek 夹爪默认值**：
+可以创建一个 xacro 文件来简化配置：
 
-- `serial_port`: `/dev/ttyUSB0`
+```xml
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  
+  <xacro:macro name="o7_dexterous_hand_interfaces" params="name serial_port:=/dev/ttyUSB0 hand_side:=right">
+    <ros2_control name="${name}_dexterous_hand" type="system">
+      <hardware>
+        <plugin>modbus_ros2_control/DexterousHandHardware</plugin>
+        <param name="serial_port">${serial_port}</param>
+        <param name="hand_side">${hand_side}</param>
+      </hardware>
+      
+      <joint name="${name}_thumb_pitch">
+        <command_interface name="position"/>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+      
+      <joint name="${name}_thumb_yaw">
+        <command_interface name="position"/>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+      
+      <joint name="${name}_index_pitch">
+        <command_interface name="position"/>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+      
+      <joint name="${name}_middle_pitch">
+        <command_interface name="position"/>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+      
+      <joint name="${name}_ring_pitch">
+        <command_interface name="position"/>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+      
+      <joint name="${name}_little_pitch">
+        <command_interface name="position"/>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+      
+      <joint name="${name}_thumb_roll">
+        <command_interface name="position"/>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+    </ros2_control>
+  </xacro:macro>
+  
+</robot>
+```
+
+然后在主 URDF 中使用：
+
+```xml
+<xacro:include filename="$(find your_package)/xacro/o7_hand_interfaces.xacro"/>
+<xacro:o7_dexterous_hand_interfaces name="left" serial_port="/dev/ttyUSB0" hand_side="left"/>
+<xacro:o7_dexterous_hand_interfaces name="right" serial_port="/dev/ttyUSB1" hand_side="right"/>
+```
+
+### 3. 配置参数说明
+
+#### Changingtek 夹爪参数
+
+**必需参数**：
+- `gripper_type`: 夹爪类型（"changingtek"）
+
+**可选参数**：
+- `variant`: 变体类型（"90c" 或 "90d"，默认 "90c"）
+- `serial_port`: 串口路径（默认 `/dev/ttyUSB0`）
+- `baudrate`: 波特率（默认 `115200`）
+- `slave_id`: Modbus 从站地址（默认 `1`）
+- `parity`: 校验位（默认 `N`，无校验）
+- `data_bits`: 数据位（默认 `8`）
+- `stop_bits`: 停止位（默认 `1`）
+
+#### O7 灵巧手参数
+
+**必需参数**：
+- `serial_port`: 串口路径（如 `/dev/ttyUSB0`）
+
+**可选参数**：
+- `hand_side`: 手部类型（"left" 或 "right"，默认 "right"）
+  - "left" → Modbus ID: 0x28 (40)
+  - "right" → Modbus ID: 0x27 (39)
+
+**固定参数**（不可修改）：
 - `baudrate`: `115200`
-- `slave_id`: `1`
 - `parity`: `N`（无校验）
 - `data_bits`: `8`
 - `stop_bits`: `1`
 
-如果您的配置与默认值不同，可以在 URDF 中显式指定这些参数来覆盖默认值。
+### 4. 位置单位
 
-### 3. 位置单位
-
+#### Changingtek 夹爪
 - **ROS2 Control 接口**：归一化值 0.0-1.0
     - 0.0 = 完全闭合
     - 1.0 = 完全打开
-
 - **Changingtek 协议**：0-9000（单位：mm）
     - 0 = 完全打开
     - 9000 = 完全闭合
+- 转换由 `ChangingtekGripper` 自动处理
 
-转换由 `ChangingtekGripper` 自动处理。
+#### O7 灵巧手
+- **ROS2 Control 接口**：归一化值 0.0-1.0
+    - 0.0 = 最小位置（弯曲/靠拢）
+    - 1.0 = 最大位置（伸直/远离）
+- **Modbus 协议**：0-255
+    - 0 = 最小位置
+    - 255 = 最大位置
+    - 128 = 中间位置
+- 转换由 `SimpleDexterousHandWrapper` 自动处理
+
+### 5. 启动方法
+
+#### 使用 basic_joint_controller（推荐）
+
+最简单的方法是使用 `basic_joint_controller` 包提供的 launch 文件：
+
+```bash
+# 启动左手（direction=1）
+ros2 launch basic_joint_controller hand.launch.py \
+    hand:=linkerhand \
+    type:=o7 \
+    hardware:=real \
+    direction:=1 \
+    serial_port:=/dev/ttyUSB0
+
+# 启动右手（direction=-1）
+ros2 launch basic_joint_controller hand.launch.py \
+    hand:=linkerhand \
+    type:=o7 \
+    hardware:=real \
+    direction:=-1 \
+    serial_port:=/dev/ttyUSB0
+```
+
+该 launch 文件会自动处理所有必要的步骤，包括启动 ros2_control_node、加载控制器等。
+
+#### 自定义 Launch 文件
+
+如果需要自定义 launch 文件，可以参考 `basic_joint_controller/launch/hand.launch.py` 的实现。
+
+关键步骤：
+1. 使用 `linkerhand_description` 包的 xacro 文件
+2. 设置 `ros2_control_hardware_type=real` 以使用 Modbus 硬件
+3. 传递 `serial_port` 和 `direction` 参数给 xacro
+4. 启动 `ros2_control_node` 和控制器
+
+### 6. 快速启动示例
+
+#### 使用 basic_joint_controller Launch 文件（推荐）
+
+```bash
+# 1. 编译
+cd ~/ros2_ws
+colcon build --packages-up-to modbus_ros2_control linkerhand_description basic_joint_controller --symlink-install
+source install/setup.bash
+
+# 2. 设置串口权限
+sudo chmod 666 /dev/ttyUSB0  # 根据实际串口调整
+
+# 3. 启动灵巧手（左手，direction=1）
+ros2 launch basic_joint_controller hand.launch.py \
+    hand:=linkerhand \
+    type:=o7 \
+    hardware:=real \
+    direction:=1 \
+    serial_port:=/dev/ttyUSB0
+
+# 或启动右手（direction=-1）
+ros2 launch basic_joint_controller hand.launch.py \
+    hand:=linkerhand \
+    type:=o7 \
+    hardware:=real \
+    direction:=-1 \
+    serial_port:=/dev/ttyUSB0
+```
+
+该 launch 文件会自动：
+- 启动 `robot_state_publisher`
+- 启动 `ros2_control_node`
+- 加载 `joint_state_broadcaster` 控制器
+- 加载 `hand_joint_controller` 控制器
+
+#### 控制灵巧手
+
+```bash
+# 发送位置命令（归一化值 0.0-1.0）
+# 格式：[thumb_joint1, thumb_joint2, thumb_joint3, index_joint, middle_joint, ring_joint, pinky_joint]
+ros2 topic pub /hand_joint_controller/commands std_msgs/msg/Float64MultiArray \
+  "{data: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]}"
+
+# 查看关节状态
+ros2 topic echo /joint_states
+
+# 查看控制器状态
+ros2 control list_controllers
+ros2 control list_hardware_interfaces
+```
 
 ## 扩展支持新的夹爪
 
@@ -148,10 +406,16 @@ if (gripper_type_ == "new_gripper") {
 
 - `libmodbus-dev` - Modbus 通信库
 - ROS2 Control 相关包
+- `controller_manager` - 控制器管理
+- `joint_state_broadcaster` - 关节状态广播
+- `position_controllers` - 位置控制器（用于灵巧手控制）
 
 ## 安装依赖
 
 ```bash
 sudo apt-get install libmodbus-dev
+sudo apt-get install ros-${ROS_DISTRO}-controller-manager
+sudo apt-get install ros-${ROS_DISTRO}-joint-state-broadcaster
+sudo apt-get install ros-${ROS_DISTRO}-position-controllers
 ```
 

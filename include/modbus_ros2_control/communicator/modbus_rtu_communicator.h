@@ -53,13 +53,22 @@ public:
     bool isConnected() const { return modbus_ctx_ != nullptr; }
 
     /**
-     * @brief 读取保持寄存器
+     * @brief 读取保持寄存器（功能码 0x03）
      * @param addr 起始寄存器地址
      * @param count 读取的寄存器数量
      * @param dest 目标缓冲区（至少 count 个 uint16_t）
      * @return 成功读取的寄存器数量，失败返回 -1
      */
     int readHoldingRegisters(uint16_t addr, int count, uint16_t* dest);
+
+    /**
+     * @brief 读取输入寄存器（功能码 0x04）
+     * @param addr 起始寄存器地址
+     * @param count 读取的寄存器数量
+     * @param dest 目标缓冲区（至少 count 个 uint16_t）
+     * @return 成功读取的寄存器数量，失败返回 -1
+     */
+    int readInputRegisters(uint16_t addr, int count, uint16_t* dest);
 
     /**
      * @brief 写入单个保持寄存器
@@ -100,6 +109,7 @@ private:
     
     modbus_t* modbus_ctx_;
     bool connected_;
+    mutable std::string last_error_;  // 存储最后的错误信息
 };
 
 } // namespace modbus_ros2_control
