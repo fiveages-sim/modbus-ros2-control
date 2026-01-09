@@ -42,7 +42,6 @@ add_library(
         src/grippers/changingtek_gripper.cpp
         src/modbus_hardware.cpp
         src/hands/dexterous_hand_base.cpp
-        src/hands/simple_dexterous_hand_wrapper.cpp
         src/dexterous_hand_hardware.cpp
 )
 

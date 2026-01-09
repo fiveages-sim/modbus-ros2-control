@@ -1,5 +1,5 @@
 #include "modbus_ros2_control/dexterous_hand_hardware.h"
-#include "modbus_ros2_control/hands/simple_dexterous_hand_wrapper.h"
+#include "modbus_ros2_control/hands/dexterous_hand_wrapper_template.h"
 #include "modbus_ros2_control/communicator/modbus_rtu_communicator.h"
 #include "gripper_hardware_common/utils/ModbusConfig.h"
 #include <pluginlib/class_list_macros.hpp>
@@ -19,6 +19,16 @@ namespace modbus_ros2_control
             return hardware_interface::CallbackReturn::ERROR;
         }
 
+        // 保存硬件参数（用于后续传递给hand_->initialize）
+        hardware_parameters_ = params.hardware_info.hardware_parameters;
+        
+        // 调试：打印所有硬件参数
+        RCLCPP_INFO(get_node()->get_logger(), "Hardware parameters received:");
+        for (const auto& [key, value] : hardware_parameters_)
+        {
+            RCLCPP_INFO(get_node()->get_logger(), "  %s = %s", key.c_str(), value.c_str());
+        }
+        
         // 读取配置参数
         loadParameters(params.hardware_info.hardware_parameters);
 
@@ -55,12 +65,15 @@ namespace modbus_ros2_control
             );
         }
 
-        if (hand_joint_names.size() != ModbusConfig::DexterousHand::JOINT_COUNT)
+        // Check if we have O7 (7 joints) or O6/L6 (6 joints) hand
+        if (hand_joint_names.size() != ModbusConfig::DexterousHand::JOINT_COUNT_O7 &&
+            hand_joint_names.size() != ModbusConfig::DexterousHand::JOINT_COUNT_O6)
         {
             RCLCPP_ERROR(
                 get_node()->get_logger(),
-                "Dexterous hand requires exactly %d joints, found %zu",
-                ModbusConfig::DexterousHand::JOINT_COUNT,
+                "Dexterous hand requires exactly %d (O7) or %d (O6/L6) joints, found %zu",
+                ModbusConfig::DexterousHand::JOINT_COUNT_O7,
+                ModbusConfig::DexterousHand::JOINT_COUNT_O6,
                 hand_joint_names.size()
             );
             return hardware_interface::CallbackReturn::ERROR;
@@ -77,21 +90,79 @@ namespace modbus_ros2_control
             ModbusConfig::DexterousHand::DEFAULT_STOP_BITS     // 停止位1
         );
 
-        // 创建灵巧手对象
-        hand_ = std::make_unique<SimpleDexterousHandWrapper>(
-            get_node()->get_logger(),
-            get_node()->get_clock(),
-            hand_joint_names
-        );
+        // Determine product type from hand_type parameter or joint count
+        // Default: O7 for 7 joints, O6 for 6 joints (can be overridden by hand_type parameter)
+        std::string product_type = hand_type_;
+        std::transform(product_type.begin(), product_type.end(), product_type.begin(), ::toupper);
+        
+        // 根据关节数量和产品类型创建对应的灵巧手对象
+        if (hand_joint_names.size() == ModbusConfig::DexterousHand::JOINT_COUNT_O7)
+        {
+            // O7 hand (7 joints)
+            hand_ = std::make_unique<SimpleDexterousHandWrapper>(
+                get_node()->get_logger(),
+                get_node()->get_clock(),
+                hand_joint_names
+            );
+            RCLCPP_INFO(
+                get_node()->get_logger(),
+                "Creating O7 dexterous hand (7-DOF)"
+            );
+        }
+        else if (hand_joint_names.size() == ModbusConfig::DexterousHand::JOINT_COUNT_O6)
+        {
+            // 6-DOF hand: determine if O6 or L6 based on hand_type parameter
+            if (product_type == "L6" || product_type.find("L6") != std::string::npos)
+            {
+                // L6 hand (6 joints)
+                hand_ = std::make_unique<L6DexterousHandWrapper>(
+                    get_node()->get_logger(),
+                    get_node()->get_clock(),
+                    hand_joint_names
+                );
+                RCLCPP_INFO(
+                    get_node()->get_logger(),
+                    "Creating L6 dexterous hand (6-DOF)"
+                );
+            }
+            else
+            {
+                // O6 hand (6 joints) - default for 6-DOF
+                hand_ = std::make_unique<O6DexterousHandWrapper>(
+                    get_node()->get_logger(),
+                    get_node()->get_clock(),
+                    hand_joint_names
+                );
+                RCLCPP_INFO(
+                    get_node()->get_logger(),
+                    "Creating O6 dexterous hand (6-DOF)"
+                );
+            }
+        }
 
         RCLCPP_INFO(
             get_node()->get_logger(),
             "DexterousHandHardware initialized:"
         );
+        // Determine product name for logging
+        std::string product_name = "Unknown";
+        if (hand_joint_names.size() == ModbusConfig::DexterousHand::JOINT_COUNT_O7)
+        {
+            product_name = "O7";
+        }
+        else if (hand_joint_names.size() == ModbusConfig::DexterousHand::JOINT_COUNT_O6)
+        {
+            std::string product_type = hand_type_;
+            std::transform(product_type.begin(), product_type.end(), product_type.begin(), ::toupper);
+            product_name = (product_type == "L6" || product_type.find("L6") != std::string::npos) ? "L6" : "O6";
+        }
+        
         RCLCPP_INFO(
             get_node()->get_logger(),
-            "  Hand type: %s",
-            hand_type_.c_str()
+            "  Hand type: %s (Product: %s, %zu-DOF)",
+            hand_type_.c_str(),
+            product_name.c_str(),
+            hand_joint_names.size()
         );
         RCLCPP_INFO(
             get_node()->get_logger(),
@@ -235,9 +306,10 @@ namespace modbus_ros2_control
         }
 
         // 初始化灵巧手
+        // 使用保存的硬件参数（包含max_speed_ratio等所有参数）
         if (!hand_->initialize(
             modbus_communicator_.get(),
-            info_.hardware_parameters,
+            hardware_parameters_,
             robot_description
         ))
         {
@@ -250,6 +322,35 @@ namespace modbus_ros2_control
         }
 
         RCLCPP_INFO(get_node()->get_logger(), "✅ Dexterous hand initialized");
+
+        // 再次读取位置并同步命令接口（确保命令接口值与实际位置一致）
+        // 这很重要，因为控制器可能在on_activate时设置了默认命令值
+        RCLCPP_INFO(get_node()->get_logger(), "Synchronizing command interfaces with actual positions...");
+        if (hand_->readStatus())
+        {
+            // 同步命令接口：将命令位置设置为当前实际位置
+            for (size_t i = 0; i < hand_->getJointNames().size(); ++i)
+            {
+                double* cmd_ptr = hand_->getPositionCommandPtr(i);
+                double* pos_ptr = hand_->getPositionPtr(i);
+                if (cmd_ptr && pos_ptr)
+                {
+                    *cmd_ptr = *pos_ptr;
+                    RCLCPP_DEBUG(
+                        get_node()->get_logger(),
+                        "Synchronized joint %s: command = %.4f (from position %.4f)",
+                        hand_->getJointNames()[i].c_str(),
+                        *cmd_ptr,
+                        *pos_ptr
+                    );
+                }
+            }
+            RCLCPP_INFO(get_node()->get_logger(), "✅ Command interfaces synchronized with actual positions");
+        }
+        else
+        {
+            RCLCPP_WARN(get_node()->get_logger(), "Failed to read positions for synchronization");
+        }
 
         // 启动后台读取线程
         hand_->startBackgroundReading();
@@ -387,7 +488,7 @@ namespace modbus_ros2_control
         // 其他串口参数也固定：停止位1, 数据位8, 校验位N
     }
 
-    bool DexterousHandHardware::createHand(const std::vector<hardware_interface::ComponentInfo>& joints)
+    bool DexterousHandHardware::createHand(const std::vector<hardware_interface::ComponentInfo>& /* joints */)
     {
         // 已在 on_init 中创建
         return true;

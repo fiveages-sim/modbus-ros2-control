@@ -6,7 +6,7 @@
 #include <rclcpp_lifecycle/state.hpp>
 
 #include "modbus_ros2_control/hands/dexterous_hand_base.h"
-#include "modbus_ros2_control/hands/simple_dexterous_hand_wrapper.h"
+#include "modbus_ros2_control/hands/dexterous_hand_wrapper_template.h"
 
 #include <memory>
 #include <string>
@@ -18,8 +18,10 @@ namespace modbus_ros2_control
     /**
      * @brief 灵巧手 ROS2 Control 硬件接口
      * 
-     * 支持 SimpleDexterousHand 的 ROS2 Control 硬件接口
-     * 提供7个关节的位置、速度、力矩接口
+     * 支持 O7 (7-DOF) 和 O6 (6-DOF) 灵巧手的 ROS2 Control 硬件接口
+     * 根据检测到的关节数量自动选择对应的实现
+     * O7: 提供7个关节的位置、速度、力矩接口
+     * O6: 提供6个关节的位置、速度、力矩接口
      */
     class DexterousHandHardware : public hardware_interface::SystemInterface
     {
@@ -99,6 +101,9 @@ namespace modbus_ros2_control
         std::string hand_side_;      // 手部：left 或 right
         std::string serial_port_;    // 串口路径
         uint8_t modbus_slave_id_;    // Modbus 从站地址（0x27=右手, 0x28=左手）
+        
+        // 保存硬件参数（用于传递给hand_->initialize）
+        std::unordered_map<std::string, std::string> hardware_parameters_;
 
         // 辅助方法
         /**

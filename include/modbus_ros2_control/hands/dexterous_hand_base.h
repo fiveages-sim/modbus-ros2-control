@@ -12,6 +12,7 @@
 #include <chrono>
 #include <array>
 #include <mutex>
+#include <limits>
 
 // Forward declaration
 namespace modbus_ros2_control {
@@ -166,7 +167,17 @@ namespace modbus_ros2_control
         std::array<double, 7> positions_ = {0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5};  // 当前位置
         std::array<double, 7> velocities_ = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};  // 当前速度
         std::array<double, 7> efforts_ = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};      // 当前力矩
-        std::array<double, 7> position_commands_ = {0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5};  // 位置命令
+        // 位置命令：初始化为 NaN 表示未初始化，避免发送默认值
+        // 在 initialize() 中会被设置为实际位置
+        std::array<double, 7> position_commands_ = {
+            std::numeric_limits<double>::quiet_NaN(),
+            std::numeric_limits<double>::quiet_NaN(),
+            std::numeric_limits<double>::quiet_NaN(),
+            std::numeric_limits<double>::quiet_NaN(),
+            std::numeric_limits<double>::quiet_NaN(),
+            std::numeric_limits<double>::quiet_NaN(),
+            std::numeric_limits<double>::quiet_NaN()
+        };
         std::array<double, 7> last_commands_ = {-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0};  // 上一次命令
 
         // 后台读取线程管理
@@ -175,6 +186,7 @@ namespace modbus_ros2_control
         std::atomic<bool> reading_thread_stop_{false};
         std::atomic<int> loop_interval_ms_{50}; // 动态循环间隔（默认50ms，对应20Hz）
         std::atomic<bool> interval_initialized_{false}; // 是否已初始化间隔
+        std::atomic<bool> initial_position_read_{false}; // 是否已读取初始位置（避免启动时跳变）
 
         /**
          * @brief 后台读取和写入线程函数

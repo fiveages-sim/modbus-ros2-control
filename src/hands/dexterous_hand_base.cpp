@@ -44,15 +44,15 @@ namespace modbus_ros2_control
         {
             std::cout << "Detected hand joint: %s" << hand_joints[i] << std::endl;
         }
-        // 如果找到的关节数量正好是7个，返回它们
-        if (hand_joints.size() == 7)
+        // 如果找到的关节数量正好是7个（O7）或6个（O6），返回它们
+        if (hand_joints.size() == 7 || hand_joints.size() == 6)
         {
             return hand_joints;
         }
 
-        // 如果找到的关节数量不是7个，返回空列表（未检测到完整的灵巧手）
+        // 如果找到的关节数量不是7个或6个，返回空列表（未检测到完整的灵巧手）
         // 注意：这里返回空列表会导致错误，但这是预期的行为
-        return {}; // 未检测到完整的灵巧手（需要7个关节）
+        return {}; // 未检测到完整的灵巧手（需要7个或6个关节）
     }
 
     DexterousHandBase::DexterousHandBase(
@@ -65,11 +65,11 @@ namespace modbus_ros2_control
           , joint_names_(joint_names)
           , initialized_(false)
     {
-        if (joint_names.size() != 7)
+        if (joint_names.size() != 7 && joint_names.size() != 6)
         {
             RCLCPP_WARN(
                 logger_,
-                "DexterousHandBase expects 7 joints, got %zu",
+                "DexterousHandBase expects 7 (O7) or 6 (O6) joints, got %zu",
                 joint_names.size()
             );
         }
@@ -198,12 +198,28 @@ namespace modbus_ros2_control
             if (initialized_)
             {
                 readStatus();
+                // After first successful read, mark initial position as read
+                if (!initial_position_read_.load())
+                {
+                    initial_position_read_ = true;
+                    RCLCPP_INFO(logger_, "Initial position read in background thread. Commands will now be written.");
+                }
             }
 
-            // 写入命令
-            if (initialized_)
+            // 写入命令 - 只有在已读取初始位置后才写入，避免启动时跳变
+            if (initialized_ && initial_position_read_.load())
             {
                 writeCommand();
+            }
+            else if (initialized_ && !initial_position_read_.load())
+            {
+                // Still waiting for initial position read
+                RCLCPP_DEBUG_THROTTLE(
+                    logger_,
+                    *clock_,
+                    1000,
+                    "Waiting for initial position read before writing commands..."
+                );
             }
 
             // 计算循环时间并休眠
