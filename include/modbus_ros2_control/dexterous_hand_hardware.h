@@ -103,6 +103,7 @@ namespace modbus_ros2_control
         uint8_t modbus_slave_id_;    // Modbus 从站地址（0x27=右手, 0x28=左手）
         
         // 保存硬件参数（用于传递给hand_->initialize）
+        // 注意：关节限位从ModbusConfig中读取，不再需要robot_description
         std::unordered_map<std::string, std::string> hardware_parameters_;
 
         // 辅助方法

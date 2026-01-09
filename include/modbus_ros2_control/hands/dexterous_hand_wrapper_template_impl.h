@@ -1,15 +1,176 @@
 #pragma once
 
 #include "modbus_ros2_control/hands/dexterous_hand_wrapper_template.h"
-#include "arms_controller_common/utils/JointLimitsManager.h"
+#include "gripper_hardware_common/utils/ModbusConfig.h"
 #include <cmath>
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
 #include <vector>
+#include <string>
 
 namespace modbus_ros2_control
 {
+    // ============================================================================
+    // Helper Functions: Joint Limits from ModbusConfig
+    // ============================================================================
+    
+    /**
+     * @brief Get joint limits from ModbusConfig based on joint name and product type
+     * @param joint_name Joint name (e.g., "thumb_joint1", "index_joint")
+     * @param product_type Product type (O7, O6, or L6)
+     * @param lower Output lower limit
+     * @param upper Output upper limit
+     * @return true if limits found, false otherwise
+     */
+    inline bool getJointLimitsFromConfig(
+        const std::string& joint_name,
+        DexterousHandProduct product_type,
+        double& lower,
+        double& upper
+    )
+    {
+        std::string name_lower = joint_name;
+        std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
+        
+        namespace ModbusConfig = gripper_hardware_common::ModbusConfig;
+        
+        if (product_type == DexterousHandProduct::O7)
+        {
+            if (name_lower.find("thumb") != std::string::npos)
+            {
+                if (name_lower.find("joint1") != std::string::npos)
+                {
+                    lower = ModbusConfig::DexterousHand::O7::THUMB_JOINT1_LOWER;
+                    upper = ModbusConfig::DexterousHand::O7::THUMB_JOINT1_UPPER;
+                    return true;
+                }
+                else if (name_lower.find("joint2") != std::string::npos)
+                {
+                    lower = ModbusConfig::DexterousHand::O7::THUMB_JOINT2_LOWER;
+                    upper = ModbusConfig::DexterousHand::O7::THUMB_JOINT2_UPPER;
+                    return true;
+                }
+                else if (name_lower.find("joint3") != std::string::npos)
+                {
+                    lower = ModbusConfig::DexterousHand::O7::THUMB_JOINT3_LOWER;
+                    upper = ModbusConfig::DexterousHand::O7::THUMB_JOINT3_UPPER;
+                    return true;
+                }
+            }
+            else if (name_lower.find("index") != std::string::npos)
+            {
+                lower = ModbusConfig::DexterousHand::O7::INDEX_JOINT_LOWER;
+                upper = ModbusConfig::DexterousHand::O7::INDEX_JOINT_UPPER;
+                return true;
+            }
+            else if (name_lower.find("middle") != std::string::npos)
+            {
+                lower = ModbusConfig::DexterousHand::O7::MIDDLE_JOINT_LOWER;
+                upper = ModbusConfig::DexterousHand::O7::MIDDLE_JOINT_UPPER;
+                return true;
+            }
+            else if (name_lower.find("ring") != std::string::npos)
+            {
+                lower = ModbusConfig::DexterousHand::O7::RING_JOINT_LOWER;
+                upper = ModbusConfig::DexterousHand::O7::RING_JOINT_UPPER;
+                return true;
+            }
+            else if (name_lower.find("pinky") != std::string::npos || name_lower.find("little") != std::string::npos)
+            {
+                lower = ModbusConfig::DexterousHand::O7::PINKY_JOINT_LOWER;
+                upper = ModbusConfig::DexterousHand::O7::PINKY_JOINT_UPPER;
+                return true;
+            }
+        }
+        else if (product_type == DexterousHandProduct::O6)
+        {
+            if (name_lower.find("thumb") != std::string::npos)
+            {
+                if (name_lower.find("joint1") != std::string::npos)
+                {
+                    lower = ModbusConfig::DexterousHand::O6::THUMB_JOINT1_LOWER;
+                    upper = ModbusConfig::DexterousHand::O6::THUMB_JOINT1_UPPER;
+                    return true;
+                }
+                else if (name_lower.find("joint2") != std::string::npos)
+                {
+                    lower = ModbusConfig::DexterousHand::O6::THUMB_JOINT2_LOWER;
+                    upper = ModbusConfig::DexterousHand::O6::THUMB_JOINT2_UPPER;
+                    return true;
+                }
+            }
+            else if (name_lower.find("index") != std::string::npos)
+            {
+                lower = ModbusConfig::DexterousHand::O6::INDEX_JOINT_LOWER;
+                upper = ModbusConfig::DexterousHand::O6::INDEX_JOINT_UPPER;
+                return true;
+            }
+            else if (name_lower.find("middle") != std::string::npos)
+            {
+                lower = ModbusConfig::DexterousHand::O6::MIDDLE_JOINT_LOWER;
+                upper = ModbusConfig::DexterousHand::O6::MIDDLE_JOINT_UPPER;
+                return true;
+            }
+            else if (name_lower.find("ring") != std::string::npos)
+            {
+                lower = ModbusConfig::DexterousHand::O6::RING_JOINT_LOWER;
+                upper = ModbusConfig::DexterousHand::O6::RING_JOINT_UPPER;
+                return true;
+            }
+            else if (name_lower.find("pinky") != std::string::npos || name_lower.find("little") != std::string::npos)
+            {
+                lower = ModbusConfig::DexterousHand::O6::PINKY_JOINT_LOWER;
+                upper = ModbusConfig::DexterousHand::O6::PINKY_JOINT_UPPER;
+                return true;
+            }
+        }
+        else if (product_type == DexterousHandProduct::L6)
+        {
+            if (name_lower.find("thumb") != std::string::npos)
+            {
+                if (name_lower.find("joint1") != std::string::npos)
+                {
+                    lower = ModbusConfig::DexterousHand::L6::THUMB_JOINT1_LOWER;
+                    upper = ModbusConfig::DexterousHand::L6::THUMB_JOINT1_UPPER;
+                    return true;
+                }
+                else if (name_lower.find("joint2") != std::string::npos)
+                {
+                    lower = ModbusConfig::DexterousHand::L6::THUMB_JOINT2_LOWER;
+                    upper = ModbusConfig::DexterousHand::L6::THUMB_JOINT2_UPPER;
+                    return true;
+                }
+            }
+            else if (name_lower.find("index") != std::string::npos)
+            {
+                lower = ModbusConfig::DexterousHand::L6::INDEX_JOINT_LOWER;
+                upper = ModbusConfig::DexterousHand::L6::INDEX_JOINT_UPPER;
+                return true;
+            }
+            else if (name_lower.find("middle") != std::string::npos)
+            {
+                lower = ModbusConfig::DexterousHand::L6::MIDDLE_JOINT_LOWER;
+                upper = ModbusConfig::DexterousHand::L6::MIDDLE_JOINT_UPPER;
+                return true;
+            }
+            else if (name_lower.find("ring") != std::string::npos)
+            {
+                lower = ModbusConfig::DexterousHand::L6::RING_JOINT_LOWER;
+                upper = ModbusConfig::DexterousHand::L6::RING_JOINT_UPPER;
+                return true;
+            }
+            else if (name_lower.find("pinky") != std::string::npos || name_lower.find("little") != std::string::npos)
+            {
+                lower = ModbusConfig::DexterousHand::L6::PINKY_JOINT_LOWER;
+                upper = ModbusConfig::DexterousHand::L6::PINKY_JOINT_UPPER;
+                return true;
+            }
+        }
+        
+        return false;
+    }
+
     // ============================================================================
     // Traits Implementation: Register Mapping Functions
     // ============================================================================
@@ -155,8 +316,7 @@ namespace modbus_ros2_control
     template<DexterousHandProduct Product>
     bool DexterousHandWrapperTemplate<Product>::initialize(
         ModbusRtuCommunicator* communicator,
-        const std::unordered_map<std::string, std::string>& params,
-        const std::string& robot_description
+        const std::unordered_map<std::string, std::string>& params
     )
     {
         if (!communicator || !communicator->isConnected())
@@ -167,92 +327,67 @@ namespace modbus_ros2_control
 
         communicator_ = communicator;
 
-        // Parse joint limits from URDF
-        if (!robot_description.empty())
+        // Load joint limits from ModbusConfig (similar to Jodell RG75)
+        RCLCPP_INFO(logger_, "Loading joint limits from ModbusConfig for %s hand", PRODUCT_NAME);
+        
+        bool all_limits_found = true;
+        for (size_t i = 0; i < joint_names_.size() && i < JOINT_COUNT; ++i)
         {
-            arms_controller_common::JointLimitsManager limits_manager(logger_);
-            size_t parsed_count = limits_manager.parseFromURDF(robot_description, joint_names_);
+            double lower = 0.0;
+            double upper = 0.0;
             
-            if (parsed_count > 0)
+            if (getJointLimitsFromConfig(joint_names_[i], Product, lower, upper))
             {
-                RCLCPP_INFO(logger_, "Parsed joint limits for %zu/%zu joints from URDF", parsed_count, joint_names_.size());
-                
-                // Read limits for each joint
-                bool all_limits_found = true;
-                for (size_t i = 0; i < joint_names_.size() && i < JOINT_COUNT; ++i)
-                {
-                    auto limits = limits_manager.getJointLimits(joint_names_[i]);
-                    if (limits.initialized)
-                    {
-                        joint_lower_limits_[i] = limits.lower;
-                        joint_upper_limits_[i] = limits.upper;
-                        RCLCPP_INFO(
-                            logger_,
-                            "Joint %s: limits [%.4f, %.4f] rad (from URDF)",
-                            joint_names_[i].c_str(),
-                            joint_lower_limits_[i],
-                            joint_upper_limits_[i]
-                        );
-                    }
-                    else
-                    {
-                        RCLCPP_ERROR(
-                            logger_,
-                            "Joint %s: limits not found in URDF! Cannot proceed without joint limits.",
-                            joint_names_[i].c_str()
-                        );
-                        all_limits_found = false;
-                    }
-                }
-                
-                if (!all_limits_found)
-                {
-                    RCLCPP_ERROR(
-                        logger_,
-                        "Failed to load all joint limits from URDF. Please ensure all %zu joints have <limit> tags in the URDF.",
-                        JOINT_COUNT
-                    );
-                    return false;
-                }
-                
-                // Print all joint limits
-                RCLCPP_INFO(logger_, "=== %s Hand Joint Limits Summary (from URDF) ===", PRODUCT_NAME);
-                RCLCPP_INFO(logger_, "Joint Name          | Modbus Reg | Lower (rad) | Upper (rad) | Range (rad)");
-                RCLCPP_INFO(logger_, "--------------------|------------|-------------|-------------|-------------");
-                for (size_t i = 0; i < joint_names_.size() && i < JOINT_COUNT; ++i)
-                {
-                    int modbus_idx = Traits::getModbusRegisterIndex(joint_names_[i]);
-                    double range = joint_upper_limits_[i] - joint_lower_limits_[i];
-                    RCLCPP_INFO(
-                        logger_,
-                        "%-18s | %10d | %11.4f | %11.4f | %11.4f",
-                        joint_names_[i].c_str(),
-                        modbus_idx,
-                        joint_lower_limits_[i],
-                        joint_upper_limits_[i],
-                        range
-                    );
-                }
-                RCLCPP_INFO(logger_, "==========================================");
+                joint_lower_limits_[i] = lower;
+                joint_upper_limits_[i] = upper;
+                RCLCPP_INFO(
+                    logger_,
+                    "Joint %s: limits [%.4f, %.4f] rad (from ModbusConfig)",
+                    joint_names_[i].c_str(),
+                    joint_lower_limits_[i],
+                    joint_upper_limits_[i]
+                );
             }
             else
             {
                 RCLCPP_ERROR(
                     logger_,
-                    "Failed to parse joint limits from URDF. Cannot proceed without joint limits. Please ensure all %zu joints have <limit> tags in the URDF.",
-                    JOINT_COUNT
+                    "Joint %s: limits not found in ModbusConfig! Cannot proceed without joint limits.",
+                    joint_names_[i].c_str()
                 );
-                return false;
+                all_limits_found = false;
             }
         }
-        else
+        
+        if (!all_limits_found)
         {
             RCLCPP_ERROR(
                 logger_,
-                "robot_description is empty. Cannot load joint limits from URDF. Please ensure robot_description parameter is set."
+                "Failed to load all joint limits from ModbusConfig. Please ensure all %zu joints have limits defined in ModbusConfig.",
+                JOINT_COUNT
             );
             return false;
         }
+        
+        // Print all joint limits
+        RCLCPP_INFO(logger_, "=== %s Hand Joint Limits Summary (from ModbusConfig) ===", PRODUCT_NAME);
+        RCLCPP_INFO(logger_, "Joint Name          | Modbus Reg | Lower (rad) | Upper (rad) | Range (rad)");
+        RCLCPP_INFO(logger_, "--------------------|------------|-------------|-------------|-------------");
+        for (size_t i = 0; i < joint_names_.size() && i < JOINT_COUNT; ++i)
+        {
+            int modbus_idx = Traits::getModbusRegisterIndex(joint_names_[i]);
+            double range = joint_upper_limits_[i] - joint_lower_limits_[i];
+            RCLCPP_INFO(
+                logger_,
+                "%-18s | %10d | %11.4f | %11.4f | %11.4f",
+                joint_names_[i].c_str(),
+                modbus_idx,
+                joint_lower_limits_[i],
+                joint_upper_limits_[i],
+                range
+            );
+        }
+        RCLCPP_INFO(logger_, "==========================================");
 
         // Read hand configuration parameter (Modbus ID)
         auto it = params.find("hand_side");

@@ -60,13 +60,11 @@ namespace modbus_ros2_control
          * @brief 初始化灵巧手（纯虚函数，由子类实现）
          * @param communicator Modbus 通信器（已连接）
          * @param params 硬件参数（从 URDF 配置中读取）
-         * @param robot_description URDF 字符串（用于解析关节限制）
          * @return 是否初始化成功
          */
         virtual bool initialize(
             ModbusRtuCommunicator* communicator,
-            const std::unordered_map<std::string, std::string>& params,
-            const std::string& robot_description
+            const std::unordered_map<std::string, std::string>& params
         ) = 0;
 
         /**

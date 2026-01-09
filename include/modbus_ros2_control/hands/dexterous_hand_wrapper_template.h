@@ -158,8 +158,7 @@ namespace modbus_ros2_control
          */
         bool initialize(
             ModbusRtuCommunicator* communicator,
-            const std::unordered_map<std::string, std::string>& params,
-            const std::string& robot_description
+            const std::unordered_map<std::string, std::string>& params
         ) override;
 
         /**

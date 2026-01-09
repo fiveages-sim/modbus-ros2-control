@@ -20,6 +20,7 @@ namespace modbus_ros2_control
         }
 
         // 保存硬件参数（用于后续传递给hand_->initialize）
+        // 注意：关节限位从ModbusConfig中读取，不再需要robot_description
         hardware_parameters_ = params.hardware_info.hardware_parameters;
         
         // 调试：打印所有硬件参数
@@ -215,102 +216,12 @@ namespace modbus_ros2_control
 
         RCLCPP_INFO(get_node()->get_logger(), "✅ Modbus connected");
 
-        // 从参数服务器获取 robot_description（launch 文件已传递）
-        std::string robot_description;
-        
-        // 首先尝试声明参数（如果还没有声明）
-        if (!get_node()->has_parameter("robot_description"))
-        {
-            get_node()->declare_parameter<std::string>("robot_description", "");
-        }
-        
-        // 尝试获取参数
-        try
-        {
-            robot_description = get_node()->get_parameter("robot_description").as_string();
-            
-            if (robot_description.empty())
-            {
-                RCLCPP_ERROR(
-                    get_node()->get_logger(),
-                    "robot_description parameter is empty. Please ensure launch file passes robot_description to ros2_control_node."
-                );
-                modbus_communicator_->disconnect();
-                return hardware_interface::CallbackReturn::ERROR;
-            }
-            
-            RCLCPP_INFO(
-                get_node()->get_logger(),
-                "✅ Got robot_description from parameter server (%zu bytes)",
-                robot_description.size()
-            );
-        }
-        catch (const rclcpp::ParameterTypeException& e)
-        {
-            RCLCPP_ERROR(
-                get_node()->get_logger(),
-                "robot_description parameter type error: %s. Trying alternative method...",
-                e.what()
-            );
-            
-            // 尝试使用 get_parameter 方法
-            try
-            {
-                if (get_node()->get_parameter("robot_description", robot_description))
-                {
-                    if (robot_description.empty())
-                    {
-                        RCLCPP_ERROR(
-                            get_node()->get_logger(),
-                            "robot_description parameter is empty."
-                        );
-                        modbus_communicator_->disconnect();
-                        return hardware_interface::CallbackReturn::ERROR;
-                    }
-                    RCLCPP_INFO(
-                        get_node()->get_logger(),
-                        "✅ Got robot_description using get_parameter (%zu bytes)",
-                        robot_description.size()
-                    );
-                }
-                else
-                {
-                    RCLCPP_ERROR(
-                        get_node()->get_logger(),
-                        "robot_description parameter not found. Please ensure launch file passes robot_description to ros2_control_node."
-                    );
-                    modbus_communicator_->disconnect();
-                    return hardware_interface::CallbackReturn::ERROR;
-                }
-            }
-            catch (const std::exception& e2)
-            {
-                RCLCPP_ERROR(
-                    get_node()->get_logger(),
-                    "Could not get robot_description from parameter server: %s",
-                    e2.what()
-                );
-                modbus_communicator_->disconnect();
-                return hardware_interface::CallbackReturn::ERROR;
-            }
-        }
-        catch (const std::exception& e)
-        {
-            RCLCPP_ERROR(
-                get_node()->get_logger(),
-                "Could not get robot_description from parameter server: %s",
-                e.what()
-            );
-            modbus_communicator_->disconnect();
-            return hardware_interface::CallbackReturn::ERROR;
-        }
-
         // 初始化灵巧手
         // 使用保存的硬件参数（包含max_speed_ratio等所有参数）
+        // 关节限位从ModbusConfig中读取（参考Jodell RG75的实现方式）
         if (!hand_->initialize(
             modbus_communicator_.get(),
-            hardware_parameters_,
-            robot_description
+            hardware_parameters_
         ))
         {
             RCLCPP_ERROR(
