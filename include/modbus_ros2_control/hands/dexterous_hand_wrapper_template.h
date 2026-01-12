@@ -78,10 +78,11 @@ namespace modbus_ros2_control
          * 
          * Register mapping (according to Modbus protocol and URDF definition):
          * Protocol: Address 0=Current_Thumb_Pitch, Address 1=Current_Thumb_Yaw
-         * URDF mapping: thumb_joint1 -> Address 1 (Current_Thumb_Yaw), thumb_joint2 -> Address 0 (Current_Thumb_Pitch)
+         * URDF mapping: thumb_joint1 (第一个关节) -> Address 0 (Current_Thumb_Pitch - 大拇指弯曲)
+         *               thumb_joint2 (第二个关节) -> Address 1 (Current_Thumb_Yaw - 大拇指横摆)
          * 
-         * Address 0: Current_Thumb_Pitch (thumb_joint2) - 大拇指弯曲
-         * Address 1: Current_Thumb_Yaw (thumb_joint1) - 大拇指横摆
+         * Address 0: Current_Thumb_Pitch (thumb_joint1) - 大拇指弯曲
+         * Address 1: Current_Thumb_Yaw (thumb_joint2) - 大拇指横摆
          * Address 2: Current_Index_Pitch (index_joint) - 食指弯曲
          * Address 3: Current_Middle_Pitch (middle_joint) - 中指弯曲
          * Address 4: Current_Ring_Pitch (ring_joint) - 无名指弯曲

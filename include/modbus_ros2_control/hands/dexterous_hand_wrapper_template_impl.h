@@ -242,14 +242,15 @@ namespace modbus_ros2_control
         {
             // O6 mapping:
             // Protocol: Address 0=Current_Thumb_Pitch (大拇指弯曲), Address 1=Current_Thumb_Yaw (大拇指横摆)
-            // URDF mapping: thumb_joint1 -> Address 1 (Current_Thumb_Yaw), thumb_joint2 -> Address 0 (Current_Thumb_Pitch)
+            // URDF mapping: thumb_joint1 (第一个关节) -> Address 0 (Current_Thumb_Pitch - 大拇指弯曲)
+            //               thumb_joint2 (第二个关节) -> Address 1 (Current_Thumb_Yaw - 大拇指横摆)
             if (name_lower.find("joint1") != std::string::npos)
             {
-                return 1;  // Address 1: Current_Thumb_Yaw (thumb_joint1 -> Address 1)
+                return 0;  // Address 0: Current_Thumb_Pitch (thumb_joint1 -> Address 0 - 大拇指弯曲)
             }
             else if (name_lower.find("joint2") != std::string::npos)
             {
-                return 0;  // Address 0: Current_Thumb_Pitch (thumb_joint2 -> Address 0)
+                return 1;  // Address 1: Current_Thumb_Yaw (thumb_joint2 -> Address 1 - 大拇指横摆)
             }
             // Fallback: check for yaw/pitch keywords (for compatibility)
             else if (name_lower.find("pitch") != std::string::npos)
