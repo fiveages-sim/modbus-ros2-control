@@ -208,4 +208,4 @@ namespace modbus_ros2_control
 } // namespace modbus_ros2_control
 
 // Include template implementation
-#include "modbus_ros2_control/hands/dexterous_hand_wrapper_template_impl.h"
+#include "modbus_ros2_control/hands/linkerhand/dexterous_hand_wrapper_template_impl.h"

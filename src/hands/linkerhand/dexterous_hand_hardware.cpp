@@ -1,4 +1,4 @@
-#include "modbus_ros2_control/dexterous_hand_hardware.h"
+#include "modbus_ros2_control/hands/linkerhand/dexterous_hand_hardware.h"
 #include "modbus_ros2_control/hands/dexterous_hand_wrapper_template.h"
 #include "modbus_ros2_control/communicator/modbus_rtu_communicator.h"
 #include "gripper_hardware_common/utils/ModbusConfig.h"

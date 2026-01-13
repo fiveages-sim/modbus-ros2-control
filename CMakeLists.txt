@@ -42,7 +42,7 @@ add_library(
         src/grippers/changingtek_gripper.cpp
         src/modbus_hardware.cpp
         src/hands/dexterous_hand_base.cpp
-        src/dexterous_hand_hardware.cpp
+        src/hands/linkerhand/dexterous_hand_hardware.cpp
 )
 
 target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
