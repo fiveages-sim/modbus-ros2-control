@@ -299,16 +299,14 @@ ros2 launch basic_joint_controller hand.launch.py \
     hand:=linkerhand \
     type:=o7 \
     hardware:=real \
-    direction:=1 \
-    serial_port:=/dev/ttyUSB0
+    direction:=1 
 
 # 启动右手（direction=-1）
 ros2 launch basic_joint_controller hand.launch.py \
     hand:=linkerhand \
     type:=o7 \
     hardware:=real \
-    direction:=-1 \
-    serial_port:=/dev/ttyUSB0
+    direction:=-1 
 ```
 
 该 launch 文件会自动处理所有必要的步骤，包括启动 ros2_control_node、加载控制器等。
@@ -333,24 +331,35 @@ cd ~/ros2_ws
 colcon build --packages-up-to modbus_ros2_control linkerhand_description basic_joint_controller --symlink-install
 source install/setup.bash
 
-# 2. 设置串口权限
+# 2. 设置串口权限（选择以下方法之一）
+
+## 方法1：临时设置（每次重启后需要重新设置）
 sudo chmod 666 /dev/ttyUSB0  # 根据实际串口调整
+
+## 方法2：永久设置 - 将用户添加到 dialout 组（推荐）
+sudo usermod -a -G dialout $USER
+# 然后注销并重新登录，或运行：newgrp dialout
+
+## 方法3：永久设置 - 使用 udev 规则（最灵活）
+# 安装 udev 规则文件
+sudo cp $(find . -name "99-ttyusb-permissions.rules") /etc/udev/rules.d/
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+# 重新插拔 USB 设备使其生效
 
 # 3. 启动灵巧手（左手，direction=1）
 ros2 launch basic_joint_controller hand.launch.py \
     hand:=linkerhand \
     type:=o7 \
     hardware:=real \
-    direction:=1 \
-    serial_port:=/dev/ttyUSB0
+    direction:=1 
 
 # 或启动右手（direction=-1）
 ros2 launch basic_joint_controller hand.launch.py \
     hand:=linkerhand \
     type:=o7 \
     hardware:=real \
-    direction:=-1 \
-    serial_port:=/dev/ttyUSB0
+    direction:=-1 
 ```
 
 该 launch 文件会自动：
