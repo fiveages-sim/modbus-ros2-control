@@ -15,6 +15,7 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
         rclcpp
         rclcpp_lifecycle
         gripper_hardware_common
+        arms_controller_common
 )
 
 find_package(ament_cmake REQUIRED)
@@ -40,6 +41,8 @@ add_library(
         src/grippers/modbus_gripper_base.cpp
         src/grippers/changingtek_gripper.cpp
         src/modbus_hardware.cpp
+        src/hands/dexterous_hand_base.cpp
+        src/hands/linkerhand/dexterous_hand_hardware.cpp
 )
 
 target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)

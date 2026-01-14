@@ -43,6 +43,20 @@ bool ModbusRtuCommunicator::connect() {
     );
 
     if (!modbus_ctx_) {
+        // modbus_new_rtu 失败时，errno 可能没有设置，使用更通用的错误信息
+        char error_msg[512];
+        const char* modbus_error = (errno != 0) ? modbus_strerror(errno) : nullptr;
+        if (modbus_error && strlen(modbus_error) > 0) {
+            snprintf(error_msg, sizeof(error_msg), 
+                     "Failed to create Modbus RTU context for %s (baudrate=%u, parity=%c, data_bits=%d, stop_bits=%d). Error: %s (errno=%d)",
+                     serial_port_.c_str(), baudrate_, parity_, data_bits_, stop_bits_,
+                     modbus_error, errno);
+        } else {
+            snprintf(error_msg, sizeof(error_msg),
+                     "Failed to create Modbus RTU context for %s (baudrate=%u, parity=%c, data_bits=%d, stop_bits=%d). Possible causes: invalid parameters, libmodbus initialization failure, or serial port access denied",
+                     serial_port_.c_str(), baudrate_, parity_, data_bits_, stop_bits_);
+        }
+        last_error_ = error_msg;
         return false;
     }
 
@@ -64,6 +78,7 @@ bool ModbusRtuCommunicator::connect() {
 
     // 设置从站地址
     if (modbus_set_slave(modbus_ctx_, slave_id_) == -1) {
+        last_error_ = "Failed to set slave ID " + std::to_string(slave_id_) + ": " + std::string(modbus_strerror(errno));
         modbus_free(modbus_ctx_);
         modbus_ctx_ = nullptr;
         return false;
@@ -71,12 +86,14 @@ bool ModbusRtuCommunicator::connect() {
 
     // 连接设备
     if (modbus_connect(modbus_ctx_) == -1) {
+        last_error_ = "Failed to connect to " + serial_port_ + ": " + std::string(modbus_strerror(errno));
         modbus_free(modbus_ctx_);
         modbus_ctx_ = nullptr;
         return false;
     }
 
     connected_ = true;
+    last_error_.clear();
     return true;
 }
 
@@ -87,6 +104,7 @@ void ModbusRtuCommunicator::disconnect() {
         modbus_ctx_ = nullptr;
     }
     connected_ = false;
+    last_error_.clear();
 }
 
 int ModbusRtuCommunicator::readHoldingRegisters(uint16_t addr, int count, uint16_t* dest) {
@@ -95,6 +113,14 @@ int ModbusRtuCommunicator::readHoldingRegisters(uint16_t addr, int count, uint16
     }
 
     return modbus_read_registers(modbus_ctx_, addr, count, dest);
+}
+
+int ModbusRtuCommunicator::readInputRegisters(uint16_t addr, int count, uint16_t* dest) {
+    if (!connected_ || !modbus_ctx_) {
+        return -1;
+    }
+
+    return modbus_read_input_registers(modbus_ctx_, addr, count, dest);
 }
 
 bool ModbusRtuCommunicator::writeRegister(uint16_t addr, uint16_t value) {
@@ -120,6 +146,9 @@ void ModbusRtuCommunicator::setDebug(bool debug) {
 }
 
 std::string ModbusRtuCommunicator::getLastError() const {
+    if (!last_error_.empty()) {
+        return last_error_;
+    }
     if (modbus_ctx_) {
         return modbus_strerror(errno);
     }

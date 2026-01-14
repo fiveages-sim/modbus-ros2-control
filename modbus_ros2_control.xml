@@ -9,5 +9,16 @@
             Currently supports: Changingtek gripper
         </description>
     </class>
+    <class name="modbus_ros2_control/DexterousHandHardware"
+           type="modbus_ros2_control::DexterousHandHardware"
+           base_class_type="hardware_interface::SystemInterface">
+        <description>
+            Modbus ROS2 Control Hardware Interface for Dexterous Hand
+            Supports O7 mechanical hand via Modbus RTU protocol.
+            Modbus ID: Right hand 0x27, Left hand 0x28
+            Baudrate: 115200 (fixed)
+            Function codes: 04 (read), 16 (write)
+        </description>
+    </class>
 </library>
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "modbus_ros2_control/grippers/modbus_gripper_base.h"
+#include "gripper_hardware_common/utils/ModbusConfig.h"
 #include <unordered_map>
 #include <string>
 
@@ -68,13 +69,30 @@ public:
 
     /**
      * @brief 静态方法：获取 Changingtek 夹爪的默认 Modbus 参数
+     * @param variant 夹爪变体 ("90c" 或 "90d"，默认为 "90c")
      * @return Modbus 参数结构体
      */
-    static ModbusParams getDefaultModbusParams();
+    static ModbusParams getDefaultModbusParams(const std::string& variant = "90c");
 
 private:
     // Modbus 通信器指针
     ModbusRtuCommunicator* communicator_;
+    
+    // 夹爪变体类型：90C 或 90D
+    enum class Variant {
+        Changingtek90C,
+        Changingtek90D
+    };
+    Variant variant_;
+    
+    // 根据变体获取反馈寄存器地址
+    uint16_t getFeedbackRegAddr() const;
+    // 根据变体获取位置寄存器地址
+    uint16_t getPosRegAddr() const;
+    // 根据变体获取触发寄存器地址
+    uint16_t getTriggerRegAddr() const;
+    // 根据变体获取从站ID
+    uint8_t getSlaveId() const;
 };
 
 } // namespace modbus_ros2_control

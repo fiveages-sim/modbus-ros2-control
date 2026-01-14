@@ -243,7 +243,12 @@ namespace modbus_ros2_control
         ModbusParams default_params;
         if (gripper_type_ == "changingtek")
         {
-            default_params = ChangingtekGripper::getDefaultModbusParams();
+            // 检查是否有变体参数
+            auto variant_it = params.find("variant");
+            std::string variant = (variant_it != params.end()) 
+                ? variant_it->second 
+                : "90c";
+            default_params = ChangingtekGripper::getDefaultModbusParams(variant);
         }
         else
         {

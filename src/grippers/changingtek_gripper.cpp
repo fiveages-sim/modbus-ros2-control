@@ -1,13 +1,15 @@
 #include "modbus_ros2_control/grippers/changingtek_gripper.h"
 #include "modbus_ros2_control/communicator/modbus_rtu_communicator.h"
+#include "gripper_hardware_common/utils/ModbusConfig.h"
 #include <unistd.h>
 #include <cmath>
 #include <utility>
+#include <algorithm>
 
 #include "gripper_hardware_common/ChangingtekGripper.h"
 
 using namespace gripper_hardware_common;
-using namespace ModbusConfig::Changingtek90;
+using namespace ModbusConfig;
 
 namespace modbus_ros2_control
 {
@@ -18,6 +20,7 @@ namespace modbus_ros2_control
     )
         : ModbusGripperBase(std::move(logger), clock, joint_name)
           , communicator_(nullptr)
+          , variant_(Variant::Changingtek90C)  // 默认使用 90C
     {
     }
 
@@ -28,7 +31,7 @@ namespace modbus_ros2_control
 
     bool ChangingtekGripper::initialize(
         ModbusRtuCommunicator* communicator,
-        const std::unordered_map<std::string, std::string>& /* params */
+        const std::unordered_map<std::string, std::string>& params
     )
     {
         if (!communicator || !communicator->isConnected())
@@ -38,6 +41,30 @@ namespace modbus_ros2_control
         }
 
         communicator_ = communicator;
+
+        // 根据参数确定使用的变体（90C 或 90D）
+        auto it = params.find("variant");
+        if (it != params.end())
+        {
+            std::string variant_str = it->second;
+            std::transform(variant_str.begin(), variant_str.end(), variant_str.begin(), ::tolower);
+            
+            if (variant_str == "90d" || variant_str == "90_d" || variant_str == "changingtek90d")
+            {
+                variant_ = Variant::Changingtek90D;
+                RCLCPP_INFO(logger_, "Using Changingtek 90D configuration");
+            }
+            else
+            {
+                variant_ = Variant::Changingtek90C;
+                RCLCPP_INFO(logger_, "Using Changingtek 90C configuration (default)");
+            }
+        }
+        else
+        {
+            variant_ = Variant::Changingtek90C;  // 默认使用 90C
+            RCLCPP_INFO(logger_, "Using Changingtek 90C configuration (default, no variant specified)");
+        }
 
         // 读取初始位置
         if (readStatus())
@@ -67,7 +94,7 @@ namespace modbus_ros2_control
 
         // 读取反馈寄存器（2个寄存器，32位）
         uint16_t feedback[2] = {0};
-        int rc = communicator_->readHoldingRegisters(FEEDBACK_REG_ADDR, 2, feedback);
+        int rc = communicator_->readHoldingRegisters(getFeedbackRegAddr(), 2, feedback);
         if (rc != 2)
         {
             RCLCPP_ERROR_THROTTLE(
@@ -123,7 +150,7 @@ namespace modbus_ros2_control
             target_pos_mm // 低位寄存器
         };
 
-        int rc = communicator_->writeRegisters(POS_REG_ADDR, 2, pos_registers);
+        int rc = communicator_->writeRegisters(getPosRegAddr(), 2, pos_registers);
         if (rc != 2)
         {
             RCLCPP_ERROR_THROTTLE(
@@ -140,7 +167,7 @@ namespace modbus_ros2_control
         usleep(100000); // 100ms（从500ms减少到100ms）
 
         // 步骤2：触发运动
-        if (!communicator_->writeRegister(TRIGGER_REG_ADDR, 0x0001))
+        if (!communicator_->writeRegister(getTriggerRegAddr(), Changingtek90C::TRIGGER_VALUE))
         {
             RCLCPP_ERROR_THROTTLE(
                 logger_,
@@ -175,15 +202,60 @@ namespace modbus_ros2_control
         }
     }
 
-    ModbusParams ChangingtekGripper::getDefaultModbusParams()
+    ModbusParams ChangingtekGripper::getDefaultModbusParams(const std::string& variant)
     {
         ModbusParams params;
-        params.serial_port = DEFAULT_SERIAL_PORT;
-        params.baudrate = DEFAULT_BAUDRATE;
-        params.slave_id = DEFAULT_SLAVE_ID;
-        params.parity = DEFAULT_PARITY;
-        params.data_bits = DEFAULT_DATA_BITS;
-        params.stop_bits = DEFAULT_STOP_BITS;
+        
+        // 根据变体选择配置
+        std::string variant_lower = variant;
+        std::transform(variant_lower.begin(), variant_lower.end(), variant_lower.begin(), ::tolower);
+        
+        if (variant_lower == "90d" || variant_lower == "90_d" || variant_lower == "changingtek90d")
+        {
+            params.serial_port = Changingtek90D::DEFAULT_SERIAL_PORT;
+            params.baudrate = Changingtek90D::DEFAULT_BAUDRATE;
+            params.slave_id = Changingtek90D::DEFAULT_SLAVE_ID;
+            params.parity = Changingtek90D::DEFAULT_PARITY;
+            params.data_bits = Changingtek90D::DEFAULT_DATA_BITS;
+            params.stop_bits = Changingtek90D::DEFAULT_STOP_BITS;
+        }
+        else
+        {
+            // 默认使用 90C
+            params.serial_port = Changingtek90C::DEFAULT_SERIAL_PORT;
+            params.baudrate = Changingtek90C::DEFAULT_BAUDRATE;
+            params.slave_id = Changingtek90C::DEFAULT_SLAVE_ID;
+            params.parity = Changingtek90C::DEFAULT_PARITY;
+            params.data_bits = Changingtek90C::DEFAULT_DATA_BITS;
+            params.stop_bits = Changingtek90C::DEFAULT_STOP_BITS;
+        }
+        
         return params;
+    }
+
+    uint16_t ChangingtekGripper::getFeedbackRegAddr() const
+    {
+        return (variant_ == Variant::Changingtek90D) 
+            ? Changingtek90D::FEEDBACK_REG_ADDR 
+            : Changingtek90C::FEEDBACK_REG_ADDR;
+    }
+
+    uint16_t ChangingtekGripper::getPosRegAddr() const
+    {
+        // 90C 和 90D 使用相同的位置寄存器地址
+        return Changingtek90C::POS_REG_ADDR;
+    }
+
+    uint16_t ChangingtekGripper::getTriggerRegAddr() const
+    {
+        // 90C 和 90D 使用相同的触发寄存器地址
+        return Changingtek90C::TRIGGER_REG_ADDR;
+    }
+
+    uint8_t ChangingtekGripper::getSlaveId() const
+    {
+        return (variant_ == Variant::Changingtek90D)
+            ? Changingtek90D::DEFAULT_SLAVE_ID
+            : Changingtek90C::DEFAULT_SLAVE_ID;
     }
 } // namespace modbus_ros2_control
