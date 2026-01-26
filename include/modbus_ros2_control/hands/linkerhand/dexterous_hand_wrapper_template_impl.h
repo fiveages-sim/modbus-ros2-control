@@ -399,11 +399,11 @@ namespace modbus_ros2_control
             
             if (side_str == "left" || side_str == "left_hand")
             {
-                modbus_slave_id_ = DexterousHand::LEFT_HAND_SLAVE_ID;
+                modbus_slave_id_ = ModbusConfig::DexterousHand::LEFT_HAND_SLAVE_ID;
             }
             else if (side_str == "right" || side_str == "right_hand")
             {
-                modbus_slave_id_ = DexterousHand::RIGHT_HAND_SLAVE_ID;
+                modbus_slave_id_ = ModbusConfig::DexterousHand::RIGHT_HAND_SLAVE_ID;
             }
             else
             {
