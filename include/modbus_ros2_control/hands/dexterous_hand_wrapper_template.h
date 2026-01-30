@@ -9,7 +9,7 @@
 #include <string>
 
 using namespace gripper_hardware_common;
-using ModbusConfig::DexterousHand;
+namespace DexterousHand = ModbusConfig::DexterousHand;
 
 namespace modbus_ros2_control
 {
