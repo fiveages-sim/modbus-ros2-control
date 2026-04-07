@@ -1,5 +1,7 @@
 # Modbus hardware plugin deb: ships ONLY modbus_ros2_control into /opt/ros/$ROS_DISTRO.
-# Build-time deps come from prebuilt arms releases (same repo): main bundle + gripper-common.
+# Build-time deps: download main bundle + gripper-common from fiveages-sim/arms_ros2_control.
+#   Default: use that repo's latest release (independent of this repo's modbus release tag).
+#   Optional workflow_dispatch input arms_dep_tag pins a specific arms release.
 # Runtime Depends: ros-base, arms-gripper-hardware-common, and (arms-ros2-control-jazzy | arms-ros2-control-jazzy-wbc)
 # so this deb does not overlap files with those packages.
 
@@ -12,11 +14,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to upload the modbus deb (and default tag for arms deps)
+        description: Release tag for this modbus deb only (upload target on this repo)
         required: false
         type: string
       arms_dep_tag:
-        description: GitHub release tag on fiveages-sim/arms_ros2_control for arms + gripper debs (blank = same as tag above)
+        description: Pin arms_ros2_control release for dependency .debs (blank = always use latest release on that repo)
         required: false
         type: string
       ros_distro:
@@ -55,6 +57,7 @@ jobs:
           INPUT_TAG: ${{ github.event.inputs.tag }}
           INPUT_ARMS_DEP_TAG: ${{ github.event.inputs.arms_dep_tag }}
           INPUT_ROS_DISTRO: ${{ github.event.inputs.ros_distro }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eo pipefail
           if [[ -n "${INPUT_TAG:-}" ]]; then
@@ -75,13 +78,23 @@ jobs:
           deb_file="${DEB_FILE_PREFIX}_${version}_amd64.deb"
           install_prefix="/opt/ros/${ros_distro}"
 
+          repo="${ARMS_RELEASE_REPO}"
           if [[ -n "${INPUT_ARMS_DEP_TAG:-}" ]]; then
             arms_dep_tag="$INPUT_ARMS_DEP_TAG"
+            if [[ "${arms_dep_tag}" != [vV]* ]]; then
+              arms_dep_tag="v${arms_dep_tag}"
+            fi
+            if ! gh release view "$arms_dep_tag" --repo "$repo" --json tagName >/dev/null 2>&1; then
+              echo "Release '${arms_dep_tag}' not found on ${repo}." >&2
+              exit 1
+            fi
           else
-            arms_dep_tag="$tag"
-          fi
-          if [[ "${arms_dep_tag}" != [vV]* ]]; then
-            arms_dep_tag="v${arms_dep_tag}"
+            arms_dep_tag="$(gh release view --repo "$repo" --json tagName -q .tagName 2>/dev/null || true)"
+            if [[ -z "${arms_dep_tag}" ]]; then
+              echo "No releases found on ${repo}." >&2
+              exit 1
+            fi
+            echo "Modbus release tag: ${tag}; dependency .debs from ${repo} @ latest: ${arms_dep_tag}" >&2
           fi
 
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
