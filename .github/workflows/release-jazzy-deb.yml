@@ -117,14 +117,19 @@ jobs:
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo "${UBUNTU_CODENAME}") main" \
             | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
           sudo apt-get update
+          # modbus links arms_controller_common from the arms deb; its ament_cmake exports
+          # run find_package(pinocchio), find_package(urdf), etc. — install those stacks here.
           sudo apt-get install -y \
             python3-rosdep python3-colcon-core python3-colcon-common-extensions \
             fakeroot dpkg-dev rsync build-essential cmake \
+            libeigen3-dev \
             libmodbus-dev \
             ros-${{ steps.meta.outputs.ros_distro }}-ament-cmake \
             ros-${{ steps.meta.outputs.ros_distro }}-ament-cmake-core \
             ros-${{ steps.meta.outputs.ros_distro }}-ament-package \
-            ros-${{ steps.meta.outputs.ros_distro }}-ros-base
+            ros-${{ steps.meta.outputs.ros_distro }}-ros-base \
+            ros-${{ steps.meta.outputs.ros_distro }}-pinocchio \
+            ros-${{ steps.meta.outputs.ros_distro }}-urdf
           sudo rosdep init || true
           rosdep update
           source "/opt/ros/${{ steps.meta.outputs.ros_distro }}/setup.bash"
