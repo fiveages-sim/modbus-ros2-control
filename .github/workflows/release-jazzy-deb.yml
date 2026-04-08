@@ -1,5 +1,10 @@
-# Runs in this repository (modbus-ros2-control) when pushed to GitHub.
-# Clones arms_ros2_control for gripper, arms_ros2_control_msgs, arms_controller_common.
+# Modbus hardware plugin deb: ships ONLY modbus_ros2_control into /opt/ros/$ROS_DISTRO.
+# Build-time deps: download main bundle + gripper-common from fiveages-sim/arms_ros2_control.
+#   Default: use that repo's latest release (independent of this repo's modbus release tag).
+#   Optional workflow_dispatch input arms_dep_tag pins a specific arms release.
+# Runtime Depends: ros-base, arms-gripper-hardware-common, and (arms-ros2-control-jazzy | arms-ros2-control-jazzy-wbc)
+# so this deb does not overlap files with those packages.
+
 name: Build Modbus ROS2 Control Deb
 
 on:
@@ -9,7 +14,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to upload the deb asset to
+        description: Release tag for this modbus deb only (upload target on this repo)
+        required: false
+        type: string
+      arms_dep_tag:
+        description: Pin arms_ros2_control release for dependency .debs (blank = always use latest release on that repo)
         required: false
         type: string
       ros_distro:
@@ -29,7 +38,10 @@ jobs:
       DEB_FILE_PREFIX: arms_modbus_ros2_control_jazzy
       ROS_PKG: modbus_ros2_control
       DEFAULT_ROS_DISTRO: jazzy
-      ARMS_MONOREPO: fiveages-sim/arms_ros2_control
+      ARMS_RELEASE_REPO: fiveages-sim/arms_ros2_control
+      MAIN_BUNDLE_PREFIX: arms-ros2-control-jazzy
+      WBC_BUNDLE_PREFIX: arms-ros2-control-jazzy-wbc
+      GRIPPER_DEB_PREFIX: arms_gripper_hardware_common_jazzy
 
     steps:
       - name: Checkout repository
@@ -43,7 +55,9 @@ jobs:
         shell: bash
         env:
           INPUT_TAG: ${{ github.event.inputs.tag }}
+          INPUT_ARMS_DEP_TAG: ${{ github.event.inputs.arms_dep_tag }}
           INPUT_ROS_DISTRO: ${{ github.event.inputs.ros_distro }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eo pipefail
           if [[ -n "${INPUT_TAG:-}" ]]; then
@@ -63,11 +77,32 @@ jobs:
           ros_distro="${INPUT_ROS_DISTRO:-$DEFAULT_ROS_DISTRO}"
           deb_file="${DEB_FILE_PREFIX}_${version}_amd64.deb"
           install_prefix="/opt/ros/${ros_distro}"
+
+          repo="${ARMS_RELEASE_REPO}"
+          if [[ -n "${INPUT_ARMS_DEP_TAG:-}" ]]; then
+            arms_dep_tag="$INPUT_ARMS_DEP_TAG"
+            if [[ "${arms_dep_tag}" != [vV]* ]]; then
+              arms_dep_tag="v${arms_dep_tag}"
+            fi
+            if ! gh release view "$arms_dep_tag" --repo "$repo" --json tagName >/dev/null 2>&1; then
+              echo "Release '${arms_dep_tag}' not found on ${repo}." >&2
+              exit 1
+            fi
+          else
+            arms_dep_tag="$(gh release view --repo "$repo" --json tagName -q .tagName 2>/dev/null || true)"
+            if [[ -z "${arms_dep_tag}" ]]; then
+              echo "No releases found on ${repo}." >&2
+              exit 1
+            fi
+            echo "Modbus release tag: ${tag}; dependency .debs from ${repo} @ latest: ${arms_dep_tag}" >&2
+          fi
+
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "ros_distro=$ros_distro" >> "$GITHUB_OUTPUT"
           echo "deb_file=$deb_file" >> "$GITHUB_OUTPUT"
           echo "install_prefix=$install_prefix" >> "$GITHUB_OUTPUT"
+          echo "arms_dep_tag=$arms_dep_tag" >> "$GITHUB_OUTPUT"
 
       - name: Install system tools
         shell: bash
@@ -82,73 +117,99 @@ jobs:
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo "${UBUNTU_CODENAME}") main" \
             | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
           sudo apt-get update
+          # modbus links arms_controller_common from the arms deb; its ament_cmake exports
+          # run find_package(pinocchio), find_package(urdf), etc. — install those stacks here.
           sudo apt-get install -y \
             python3-rosdep python3-colcon-core python3-colcon-common-extensions \
             fakeroot dpkg-dev rsync build-essential cmake \
+            libeigen3-dev \
             libmodbus-dev \
             ros-${{ steps.meta.outputs.ros_distro }}-ament-cmake \
             ros-${{ steps.meta.outputs.ros_distro }}-ament-cmake-core \
             ros-${{ steps.meta.outputs.ros_distro }}-ament-package \
-            ros-${{ steps.meta.outputs.ros_distro }}-ros-base
+            ros-${{ steps.meta.outputs.ros_distro }}-ros-base \
+            ros-${{ steps.meta.outputs.ros_distro }}-pinocchio \
+            ros-${{ steps.meta.outputs.ros_distro }}-urdf
           sudo rosdep init || true
           rosdep update
           source "/opt/ros/${{ steps.meta.outputs.ros_distro }}/setup.bash"
           python3 -c "import ament_package; print('ament_package ok')"
 
-      - name: Fetch arms_ros2_control (dependency sources)
+      - name: Download arms_ros2_control dependency debs and extract into ROS prefix
         shell: bash
         env:
-          TOKEN: ${{ secrets.ARMS_MONOREPO_CHECKOUT_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          ARMS_DEP_TAG: ${{ steps.meta.outputs.arms_dep_tag }}
+          INSTALL_PREFIX: ${{ steps.meta.outputs.install_prefix }}
         run: |
           set -eo pipefail
-          git clone --depth 1 "https://x-access-token:${TOKEN}@github.com/${ARMS_MONOREPO}.git" "${RUNNER_TEMP}/arms_ros2_control"
 
-      - name: Prepare workspace
-        shell: bash
-        run: |
-          set -eo pipefail
-          ws="${RUNNER_TEMP}/modbus-ws"
-          rm -rf "$ws"
-          mkdir -p "$ws"
-          rsync -a "${RUNNER_TEMP}/arms_ros2_control/libraries/gripper_hardware_common/" "${ws}/gripper_hardware_common/"
-          rsync -a "${RUNNER_TEMP}/arms_ros2_control/command/arms_ros2_control_msgs/" "${ws}/arms_ros2_control_msgs/"
-          rsync -a "${RUNNER_TEMP}/arms_ros2_control/libraries/arms_controller_common/" "${ws}/arms_controller_common/"
-          rsync -a "${GITHUB_WORKSPACE}/" "${ws}/${ROS_PKG}/"
+          deps_dir="${RUNNER_TEMP}/modbus-dependency-debs"
+          rm -rf "$deps_dir"
+          mkdir -p "$deps_dir"
 
-      - name: Install workspace dependencies (gripper)
-        shell: bash
-        env:
-          ROS_DISTRO: ${{ steps.meta.outputs.ros_distro }}
-        run: |
-          set -eo pipefail
-          source "/opt/ros/${ROS_DISTRO}/setup.bash"
-          ros_python_path="/opt/ros/${ROS_DISTRO}/lib/python$(python3 -c 'import sys; print(str(sys.version_info.major) + "." + str(sys.version_info.minor))')/site-packages"
-          export PYTHONPATH="${ros_python_path}:${PYTHONPATH:-}"
-          rosdep install --from-paths "${RUNNER_TEMP}/modbus-ws/gripper_hardware_common" --ignore-src --rosdistro "${ROS_DISTRO}" --reinstall -r -y
+          try_download() {
+            local tag="$1" repo="$2" label="$3"
+            shift 3
+            local p
+            for p in "$@"; do
+              if gh release download "$tag" --repo "$repo" --pattern "$p" --dir "$deps_dir" 2>/dev/null; then
+                return 0
+              fi
+            done
+            echo "No asset matched for ${label} (${repo}@${tag}). Assets:" >&2
+            gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name' >&2 || true
+            return 1
+          }
 
-      - name: Install workspace dependencies (stack)
-        shell: bash
-        env:
-          ROS_DISTRO: ${{ steps.meta.outputs.ros_distro }}
-        run: |
-          set -eo pipefail
-          source "/opt/ros/${ROS_DISTRO}/setup.bash"
-          ros_python_path="/opt/ros/${ROS_DISTRO}/lib/python$(python3 -c 'import sys; print(str(sys.version_info.major) + "." + str(sys.version_info.minor))')/site-packages"
-          export PYTHONPATH="${ros_python_path}:${PYTHONPATH:-}"
-          rosdep install \
-            --from-paths \
-              "${RUNNER_TEMP}/modbus-ws/arms_ros2_control_msgs" \
-              "${RUNNER_TEMP}/modbus-ws/arms_controller_common" \
-              "${RUNNER_TEMP}/modbus-ws/${ROS_PKG}" \
-            --ignore-src \
-            --rosdistro "${ROS_DISTRO}" \
-            --reinstall \
-            -r \
-            -y \
-            --skip-keys \
-              lina_planning
+          # Gripper common (required to link modbus against gripper_hardware_common)
+          try_download "$ARMS_DEP_TAG" "$ARMS_RELEASE_REPO" "gripper_hardware_common" \
+            "${GRIPPER_DEB_PREFIX}_*_amd64.deb" \
+            "*${GRIPPER_DEB_PREFIX}*_amd64.deb"
 
-      - name: Build install space
+          # Main stack: msgs + arms_controller_common (prefer public bundle, else WBC)
+          if ! try_download "$ARMS_DEP_TAG" "$ARMS_RELEASE_REPO" "arms main bundle" \
+            "${MAIN_BUNDLE_PREFIX}_*_amd64.deb" \
+            "*${MAIN_BUNDLE_PREFIX}*_amd64.deb"; then
+            try_download "$ARMS_DEP_TAG" "$ARMS_RELEASE_REPO" "arms WBC bundle" \
+              "${WBC_BUNDLE_PREFIX}_*_amd64.deb" \
+              "*${WBC_BUNDLE_PREFIX}*_amd64.deb"
+          fi
+
+          shopt -s nullglob
+          gmatches=("$deps_dir"/"${GRIPPER_DEB_PREFIX}"_*_amd64.deb)
+          if [[ ${#gmatches[@]} -ne 1 ]]; then
+            echo "Expected exactly one gripper .deb in ${deps_dir}, got ${#gmatches[@]}: ${gmatches[*]}" >&2
+            ls -la "$deps_dir" >&2 || true
+            exit 1
+          fi
+          gripper_path="${gmatches[0]}"
+
+          main_path=""
+          matches=("$deps_dir"/"${MAIN_BUNDLE_PREFIX}"_*_amd64.deb)
+          if [[ ${#matches[@]} -ge 1 ]]; then
+            main_path="${matches[0]}"
+          else
+            matches=("$deps_dir"/"${WBC_BUNDLE_PREFIX}"_*_amd64.deb)
+            if [[ ${#matches[@]} -ge 1 ]]; then
+              main_path="${matches[0]}"
+            fi
+          fi
+          if [[ -z "$main_path" || ! -f "$main_path" ]]; then
+            echo "Need either ${MAIN_BUNDLE_PREFIX} or ${WBC_BUNDLE_PREFIX} .deb at ${ARMS_DEP_TAG}." >&2
+            exit 1
+          fi
+
+          extract_root="${RUNNER_TEMP}/modbus-dep-extract"
+          rm -rf "$extract_root"
+          mkdir -p "$extract_root/gripper" "$extract_root/main"
+          dpkg-deb -x "$gripper_path" "$extract_root/gripper"
+          dpkg-deb -x "$main_path" "$extract_root/main"
+          sudo rsync -a "$extract_root/gripper${INSTALL_PREFIX}/" "${INSTALL_PREFIX}/"
+          sudo rsync -a "$extract_root/main${INSTALL_PREFIX}/" "${INSTALL_PREFIX}/"
+          echo "Merged dependency debs into ${INSTALL_PREFIX} (ament index only; use system ROS setup.bash)."
+
+      - name: Install rosdep for modbus package only
         shell: bash
         env:
           ROS_DISTRO: ${{ steps.meta.outputs.ros_distro }}
@@ -158,29 +219,35 @@ jobs:
           source "/opt/ros/${ROS_DISTRO}/setup.bash"
           ros_python_path="/opt/ros/${ROS_DISTRO}/lib/python$(python3 -c 'import sys; print(str(sys.version_info.major) + "." + str(sys.version_info.minor))')/site-packages"
           export PYTHONPATH="${ros_python_path}:${PYTHONPATH:-}"
-          ws="${RUNNER_TEMP}/modbus-ws"
+          rosdep install \
+            --from-paths "${GITHUB_WORKSPACE}" \
+            --ignore-src \
+            --rosdistro "${ROS_DISTRO}" \
+            --reinstall \
+            -r \
+            -y \
+            --skip-keys \
+              lina_planning
+
+      - name: Build install space (modbus_ros2_control only)
+        shell: bash
+        env:
+          ROS_DISTRO: ${{ steps.meta.outputs.ros_distro }}
+          INSTALL_PREFIX: ${{ steps.meta.outputs.install_prefix }}
+        run: |
+          set -eo pipefail
+          source "/opt/ros/${ROS_DISTRO}/setup.bash"
+          ros_python_path="/opt/ros/${ROS_DISTRO}/lib/python$(python3 -c 'import sys; print(str(sys.version_info.major) + "." + str(sys.version_info.minor))')/site-packages"
+          export PYTHONPATH="${ros_python_path}:${PYTHONPATH:-}"
           build_root="${RUNNER_TEMP}/colcon-modbus"
           package_root="${RUNNER_TEMP}/deb-modbus/package"
           install_root="${package_root}${INSTALL_PREFIX}"
           rm -rf "$build_root" "$package_root"
           mkdir -p "$build_root" "$package_root"
-          stage1="${RUNNER_TEMP}/stage1-gripper-modbus"
-          rm -rf "$stage1"
-          mkdir -p "$stage1"
-          colcon --log-base "${build_root}/log-s1" build \
-            --base-paths "${ws}/gripper_hardware_common" \
-            --packages-select gripper_hardware_common \
-            --build-base "${build_root}/build-s1" \
-            --install-base "$stage1" \
-            --merge-install
-          source "$stage1/setup.bash"
-          colcon --log-base "${build_root}/log-s2" build \
-            --base-paths \
-              "${ws}/arms_ros2_control_msgs" \
-              "${ws}/arms_controller_common" \
-              "${ws}/${ROS_PKG}" \
-            --packages-select arms_ros2_control_msgs arms_controller_common "${ROS_PKG}" \
-            --build-base "${build_root}/build-s2" \
+          colcon --log-base "${build_root}/log" build \
+            --base-paths "${GITHUB_WORKSPACE}" \
+            --packages-select "${ROS_PKG}" \
+            --build-base "${build_root}/build" \
             --install-base "${install_root}" \
             --merge-install
           python3 -c "import sys; exec('''import os\ninstall_root = sys.argv[1]\nruntime_prefix = sys.argv[2]\nfor dirpath, _, filenames in os.walk(install_root):\n    for filename in filenames:\n        path = os.path.join(dirpath, filename)\n        try:\n            with open(path, \"r\", encoding=\"utf-8\") as f:\n                content = f.read()\n        except Exception:\n            continue\n        if install_root not in content:\n            continue\n        with open(path, \"w\", encoding=\"utf-8\") as f:\n            f.write(content.replace(install_root, runtime_prefix))''')" "$install_root" "$INSTALL_PREFIX"
@@ -214,11 +281,11 @@ jobs:
           Section: misc
           Priority: optional
           Architecture: amd64
-          Depends: ros-${ROS_DISTRO}-ros-base, arms-gripper-hardware-common-${ROS_DISTRO}
+          Depends: ros-${ROS_DISTRO}-ros-base, arms-gripper-hardware-common-${ROS_DISTRO}, arms-ros2-control-jazzy | arms-ros2-control-jazzy-wbc
           Maintainer: ${GITHUB_REPOSITORY} maintainers <github-actions[bot]@users.noreply.github.com>
           Installed-Size: ${installed_size}
-          Description: ${ROS_PKG} ROS 2 hardware plugin (standalone deb)
-           Bundles arms_ros2_control_msgs and arms_controller_common from arms_ros2_control. Requires arms-gripper-hardware-common at runtime.
+          Description: ${ROS_PKG} ROS 2 hardware plugin (minimal deb)
+           Installs only modbus_ros2_control under ${INSTALL_PREFIX}. Requires arms-gripper-hardware-common plus either arms-ros2-control-jazzy or arms-ros2-control-jazzy-wbc for shared libraries and messages.
           EOF
           if [[ ! -d "${install_root}/share/${ROS_PKG}" ]]; then
             echo "Missing ${install_root}/share/${ROS_PKG}" >&2
@@ -235,7 +302,7 @@ jobs:
           DEB_PATH: ${{ steps.build.outputs.deb_path }}
         run: |
           set -eo pipefail
-          if ! gh release view "$TAG" > /dev/null 2>&1; then
-            gh release create "$TAG" --title "$TAG" --notes "Automated Debian package build."
+          if ! gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
+            gh release create "$TAG" --repo "${GITHUB_REPOSITORY}" --title "$TAG" --notes "Automated Debian package build (modbus_ros2_control minimal deb)."
           fi
-          gh release upload "$TAG" "$DEB_PATH" --clobber
+          gh release upload "$TAG" "$DEB_PATH" --repo "${GITHUB_REPOSITORY}" --clobber
