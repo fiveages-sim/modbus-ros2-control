@@ -2,6 +2,7 @@
 #include "modbus_ros2_control/communicator/modbus_rtu_communicator.h"
 #include <algorithm>
 #include <cctype>
+#include <limits>
 #include <utility>
 #include <chrono>
 #include <thread>
@@ -73,6 +74,8 @@ namespace modbus_ros2_control
                 joint_names.size()
             );
         }
+        last_effort_applied_.fill(std::numeric_limits<double>::quiet_NaN());
+        last_velocity_applied_.fill(std::numeric_limits<double>::quiet_NaN());
     }
 
     DexterousHandBase::~DexterousHandBase()
@@ -92,18 +95,6 @@ namespace modbus_ros2_control
                     joint_names_[i], hardware_interface::HW_IF_POSITION, getPositionPtr(i)
                 )
             );
-
-            state_interfaces.push_back(
-                std::make_shared<hardware_interface::StateInterface>(
-                    joint_names_[i], hardware_interface::HW_IF_VELOCITY, getVelocityPtr(i)
-                )
-            );
-
-            state_interfaces.push_back(
-                std::make_shared<hardware_interface::StateInterface>(
-                    joint_names_[i], hardware_interface::HW_IF_EFFORT, getEffortPtr(i)
-                )
-            );
         }
     }
 
@@ -118,6 +109,20 @@ namespace modbus_ros2_control
                     joint_names_[i], hardware_interface::HW_IF_POSITION, getPositionCommandPtr(i)
                 )
             );
+        }
+    }
+
+    void DexterousHandBase::applyToolDynamics(const double torque, const double velocity)
+    {
+        const double t = std::clamp(torque, 0.0, 1.0);
+        const double v = std::clamp(velocity, 0.0, 1.0);
+        const size_t n = std::min(joint_names_.size(), static_cast<size_t>(7));
+        for (size_t i = 0; i < n; ++i)
+        {
+            effort_commands_[i] = t;
+            velocity_commands_[i] = v;
+            last_effort_applied_[i] = std::numeric_limits<double>::quiet_NaN();
+            last_velocity_applied_[i] = std::numeric_limits<double>::quiet_NaN();
         }
     }
 

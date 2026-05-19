@@ -134,7 +134,6 @@ namespace modbus_ros2_control
             if (joint_index < 7) return &position_commands_[joint_index];
             return nullptr;
         }
-
         /**
          * @brief 导出灵巧手状态接口到硬件接口列表
          * @param state_interfaces 状态接口列表（会被修改，添加灵巧手接口）
@@ -150,6 +149,9 @@ namespace modbus_ros2_control
         void exportCommandInterfaces(
             std::vector<hardware_interface::CommandInterface::SharedPtr>& command_interfaces
         );
+
+        /** Normalized torque/velocity (0~1) for all hand joints; set via hardware ROS params. */
+        void applyToolDynamics(double torque, double velocity);
 
     protected:
         // 日志相关
@@ -177,6 +179,11 @@ namespace modbus_ros2_control
             std::numeric_limits<double>::quiet_NaN()
         };
         std::array<double, 7> last_commands_ = {-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0};  // 上一次命令
+        /** Normalized [0,1] torque/speed (from ROS params, not command interfaces). */
+        std::array<double, 7> effort_commands_{1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+        std::array<double, 7> velocity_commands_{1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+        std::array<double, 7> last_effort_applied_{};
+        std::array<double, 7> last_velocity_applied_{};
 
         // 后台读取线程管理
         std::thread reading_thread_;

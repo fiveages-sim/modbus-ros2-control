@@ -234,7 +234,26 @@ modbus_ros2_control/
 <xacro:o7_dexterous_hand_interfaces name="right" serial_port="/dev/ttyUSB1" hand_side="right"/>
 ```
 
-### 3. 配置参数说明
+### 3. 末端力矩/速度调试（ROS 参数）
+
+夹爪（`ModbusHardware`）与灵巧手（`DexterousHandHardware`）均使用**统一**参数，不区分左右或单关节：
+
+- `tool_torque`（double，0~1）
+- `tool_velocity`（double，0~1）
+
+位置仍由上层 controller 经 **position command interface** 下发（`target_percent` 等），不要用 param 设位置。
+
+```bash
+# 夹爪硬件节点（节点名以 launch 为准）
+ros2 param set /<modbus_gripper_node> tool_torque 0.8
+ros2 param set /<modbus_gripper_node> tool_velocity 1.0
+
+# 灵巧手硬件节点（每只手一个 ros2_control 节点，各自一套 tool_*）
+ros2 param set /linkerhand_7_left_system tool_torque 0.8
+ros2 param set /linkerhand_7_left_system tool_velocity 1.0
+```
+
+### 4. 配置参数说明
 
 #### Changingtek 夹爪参数
 
@@ -256,9 +275,10 @@ modbus_ros2_control/
 - `serial_port`: 串口路径（如 `/dev/ttyUSB0`）
 
 **可选参数**：
-- `hand_side`: 手部类型（"left" 或 "right"，默认 "right"）
+- `hand_side`: 手部类型（"left" 或 "right"，默认 "right"）— 仅用于 Modbus 从站地址，与 `tool_torque`/`tool_velocity` 无关
   - "left" → Modbus ID: 0x28 (40)
   - "right" → Modbus ID: 0x27 (39)
+- `tool_torque`、`tool_velocity`: 该节点上**全部关节**共用同一力矩/速度（见上文）
 
 **固定参数**（不可修改）：
 - `baudrate`: `115200`

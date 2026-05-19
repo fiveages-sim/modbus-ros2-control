@@ -84,6 +84,7 @@ private:
         Changingtek90D
     };
     Variant variant_;
+    bool profile_motion_registers_sent_{false};
     
     // 根据变体获取反馈寄存器地址
     uint16_t getFeedbackRegAddr() const;
@@ -93,6 +94,9 @@ private:
     uint16_t getTriggerRegAddr() const;
     // 根据变体获取从站ID
     uint8_t getSlaveId() const;
+
+    bool writeRegisterChecked(uint16_t addr, uint16_t value, const char* label);
+    bool ensureProfileMotionRegisters();
 };
 
 } // namespace modbus_ros2_control

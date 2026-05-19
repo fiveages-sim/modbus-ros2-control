@@ -2,6 +2,7 @@
 
 #include <hardware_interface/hardware_info.hpp>
 #include <hardware_interface/system_interface.hpp>
+#include <limits>
 #include <rclcpp/rclcpp.hpp>
 #include <string>
 #include <vector>
@@ -125,6 +126,9 @@ namespace modbus_ros2_control
         double* getEffortPtr() { return &effort_; }
         double* getPositionCommandPtr() { return &position_command_; }
 
+        /** Normalized torque/velocity (0~1) for the gripper; set via hardware ROS params. */
+        void applyToolDynamics(double torque, double velocity);
+
         /**
          * @brief 导出夹爪状态接口到硬件接口列表
          * @param state_interfaces 状态接口列表（会被修改，添加夹爪接口）
@@ -157,7 +161,12 @@ namespace modbus_ros2_control
         double velocity_ = 0.0; // 当前速度
         double effort_ = 0.0; // 当前力矩
         double position_command_ = 0.0; // 位置命令
-        double last_command_ = -1.0; // 上一次命令（用于检测变化）
+        /** Normalized [0,1] torque / velocity (from ROS params, not command interfaces). */
+        double velocity_command_ = 1.0;
+        double effort_command_ = 1.0;
+        double last_command_ = -1.0; // 上一次位置命令（用于检测变化）
+        double last_applied_effort_command_{std::numeric_limits<double>::quiet_NaN()};
+        double last_applied_velocity_command_{std::numeric_limits<double>::quiet_NaN()};
 
         // 后台读取线程管理
         std::thread reading_thread_;

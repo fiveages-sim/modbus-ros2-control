@@ -183,23 +183,17 @@ namespace modbus_ros2_control
         
         if (name_lower.find("thumb") != std::string::npos)
         {
-            if (name_lower.find("joint1") != std::string::npos)
+            if (name_lower.find("joint1") != std::string::npos || name_lower.find("pitch") != std::string::npos)
             {
-                return 6;  // Thumb_Roll (joint1 实际对应 Roll)
+                return 0;  // Thumb_Pitch
             }
-            else if (name_lower.find("joint2") != std::string::npos || 
-                     name_lower.find("yaw") != std::string::npos)
+            if (name_lower.find("joint2") != std::string::npos || name_lower.find("yaw") != std::string::npos)
             {
                 return 1;  // Thumb_Yaw
             }
-            else if (name_lower.find("joint3") != std::string::npos || 
-                     name_lower.find("roll") != std::string::npos)
+            if (name_lower.find("joint3") != std::string::npos || name_lower.find("roll") != std::string::npos)
             {
-                return 0;  // Thumb_Pitch (joint3 实际对应 Pitch)
-            }
-            else if (name_lower.find("pitch") != std::string::npos)
-            {
-                return 0;  // Thumb_Pitch
+                return 6;  // Thumb_Roll
             }
         }
         else if (name_lower.find("index") != std::string::npos)
@@ -423,7 +417,7 @@ namespace modbus_ros2_control
             {
                 max_speed_ratio_ = std::stod(speed_it->second);
                 // Clamp to valid range [0.0, 1.0]
-                max_speed_ratio_ = std::max(0.0, std::min(1.0, max_speed_ratio_));
+                max_speed_ratio_ = std::clamp(max_speed_ratio_, 0.0, 1.0);
                 RCLCPP_INFO(
                     logger_,
                     "Speed limiting enabled: max_speed_ratio = %.2f (%.0f%% of maximum speed)",
@@ -455,6 +449,11 @@ namespace modbus_ros2_control
             for (size_t i = 0; i < JOINT_COUNT && i < position_commands_.size(); ++i)
             {
                 position_commands_[i] = positions_[i];
+            }
+            for (size_t i = 0; i < JOINT_COUNT; ++i)
+            {
+                last_effort_applied_[i] = effort_commands_[i];
+                last_velocity_applied_[i] = velocity_commands_[i];
             }
             
             // Prepare for initial write with speed limiting support
@@ -499,6 +498,11 @@ namespace modbus_ros2_control
                 position_commands_[i] = middle;
                 last_commands_[i] = middle - 0.0001;  // Trigger write
             }
+            for (size_t i = 0; i < JOINT_COUNT; ++i)
+            {
+                last_effort_applied_[i] = effort_commands_[i];
+                last_velocity_applied_[i] = velocity_commands_[i];
+            }
             
             writeCommand();  // Write default positions
             
@@ -523,38 +527,41 @@ namespace modbus_ros2_control
             return false;
         }
 
-        // Read joint positions using Input Registers (Function Code 04)
-        // According to O6 protocol: Only FC 04 (Read Input Registers) and FC 16 (Write Holding Registers) are supported
-        // Address 0-5 are Input Registers for current joint position
-        uint16_t joint_data[JOINT_COUNT] = {0};
-        int rc = communicator_->readInputRegisters(Traits::JOINT_POSITION_REG_START, JOINT_COUNT, joint_data);
-        
-        if (rc == static_cast<int>(JOINT_COUNT))
+        // FC04：按型号读取 位置 + 力矩 + 速度 输入寄存器
+        constexpr uint16_t kInputBlockCount =
+            static_cast<uint16_t>(Traits::JOINT_SPEED_REG_START + JOINT_COUNT);
+        uint16_t input_data[kInputBlockCount] = {0};
+        int rc = communicator_->readInputRegisters(Traits::JOINT_POSITION_REG_START, kInputBlockCount, input_data);
+
+        if (rc == static_cast<int>(kInputBlockCount))
         {
-            // Create mapping: joint name -> Modbus register index
             std::vector<int> modbus_indices(JOINT_COUNT, -1);
             for (size_t i = 0; i < joint_names_.size() && i < JOINT_COUNT; ++i)
             {
                 modbus_indices[i] = Traits::getModbusRegisterIndex(joint_names_[i]);
-                if (modbus_indices[i] < 0 || modbus_indices[i] >= static_cast<int>(JOINT_COUNT))
+                if (modbus_indices[i] < 0)
                 {
                     RCLCPP_ERROR(logger_, "Failed to map joint %s to Modbus register", joint_names_[i].c_str());
                     return false;
                 }
             }
-            
-            // Successfully read, convert raw values (0-255) to radians
-            uint8_t raw_values[JOINT_COUNT];
+
+            uint8_t raw_positions[JOINT_COUNT];
             for (size_t i = 0; i < JOINT_COUNT; ++i)
             {
-                int modbus_idx = modbus_indices[i];
-                raw_values[i] = static_cast<uint8_t>(joint_data[modbus_idx] & 0xFF);
-                positions_[i] = rawToRadians(i, raw_values[i]);
-                velocities_[i] = 0.0;
-                efforts_[i] = 0.0;
+                const int mi = modbus_indices[i];
+                raw_positions[i] = static_cast<uint8_t>(input_data[mi] & 0xFF);
+                positions_[i] = rawToRadians(i, raw_positions[i]);
+
+                const uint16_t torque_off =
+                    static_cast<uint16_t>(Traits::JOINT_TORQUE_REG_START + static_cast<uint16_t>(mi));
+                const uint16_t speed_off =
+                    static_cast<uint16_t>(Traits::JOINT_SPEED_REG_START + static_cast<uint16_t>(mi));
+                efforts_[i] = static_cast<double>(input_data[torque_off] & 0xFF) / 255.0;
+                velocities_[i] = static_cast<double>(input_data[speed_off] & 0xFF) / 255.0;
             }
 
-            logStatus(raw_values);
+            logStatus(raw_positions);
             return true;
         }
         else
@@ -563,15 +570,17 @@ namespace modbus_ros2_control
                 logger_,
                 *clock_,
                 2000,
-                "Failed to read %s hand position using Function Code 04 (Read Input Registers): %s (read %d registers, expected %zu). "
-                "O6 protocol only supports FC 04 (read) and FC 16 (write). "
+                "Failed to read %s hand input registers (FC04): %s (read %d, expected %u). "
+                "Position/torque/speed block start=%u count=%u. "
                 "Please check: 1) Modbus slave ID is correct (0x27=right hand, 0x28=left hand), "
                 "2) Device is powered on and in Modbus mode, 3) Serial port is correct (/dev/ttyUSB0), "
                 "4) Baudrate is 115200, 5) No other process is using the serial port",
                 PRODUCT_NAME,
                 communicator_->getLastError().c_str(),
                 rc,
-                JOINT_COUNT
+                kInputBlockCount,
+                Traits::JOINT_POSITION_REG_START,
+                kInputBlockCount
             );
             return false;
         }
@@ -650,6 +659,24 @@ namespace modbus_ros2_control
                 break;
             }
         }
+        if (!has_changes)
+        {
+            for (size_t i = 0; i < JOINT_COUNT; ++i)
+            {
+                if (std::isnan(last_effort_applied_[i]) ||
+                    std::abs(effort_commands_[i] - last_effort_applied_[i]) > 0.001)
+                {
+                    has_changes = true;
+                    break;
+                }
+                if (std::isnan(last_velocity_applied_[i]) ||
+                    std::abs(velocity_commands_[i] - last_velocity_applied_[i]) > 0.001)
+                {
+                    has_changes = true;
+                    break;
+                }
+            }
+        }
 
         if (!has_changes)
         {
@@ -688,10 +715,54 @@ namespace modbus_ros2_control
         
         if (rc == static_cast<int>(JOINT_COUNT))
         {
+            uint16_t raw_torque[JOINT_COUNT] = {0};
+            uint16_t raw_speed[JOINT_COUNT] = {0};
+            for (size_t i = 0; i < JOINT_COUNT; ++i)
+            {
+                const int mi = modbus_indices[i];
+                const double et = std::clamp(effort_commands_[i], 0.0, 1.0);
+                const double vt = std::clamp(velocity_commands_[i], 0.0, 1.0);
+                raw_torque[static_cast<size_t>(mi)] = static_cast<uint16_t>(std::lround(et * 255.0));
+                raw_speed[static_cast<size_t>(mi)] = static_cast<uint16_t>(std::lround(vt * 255.0));
+            }
+
+            const int rc_t = communicator_->writeRegisters(
+                Traits::JOINT_TORQUE_REG_START, JOINT_COUNT, raw_torque);
+            if (rc_t != static_cast<int>(JOINT_COUNT))
+            {
+                RCLCPP_WARN_THROTTLE(
+                    logger_,
+                    *clock_,
+                    1000,
+                    "Failed to write %s hand torque registers (start=%u): %s",
+                    PRODUCT_NAME,
+                    Traits::JOINT_TORQUE_REG_START,
+                    communicator_->getLastError().c_str()
+                );
+                return false;
+            }
+            const int rc_s = communicator_->writeRegisters(
+                Traits::JOINT_SPEED_REG_START, JOINT_COUNT, raw_speed);
+            if (rc_s != static_cast<int>(JOINT_COUNT))
+            {
+                RCLCPP_WARN_THROTTLE(
+                    logger_,
+                    *clock_,
+                    1000,
+                    "Failed to write %s hand speed registers (start=%u): %s",
+                    PRODUCT_NAME,
+                    Traits::JOINT_SPEED_REG_START,
+                    communicator_->getLastError().c_str()
+                );
+                return false;
+            }
+
             // Update last_commands_ with speed-limited commands
             for (size_t i = 0; i < JOINT_COUNT; ++i)
             {
                 last_commands_[i] = limited_commands[i];
+                last_effort_applied_[i] = effort_commands_[i];
+                last_velocity_applied_[i] = velocity_commands_[i];
             }
             
             logCommand(raw_positions);
@@ -742,7 +813,7 @@ namespace modbus_ros2_control
         }
 
         double normalized = (radians - lower) / range;
-        normalized = std::max(0.0, std::min(1.0, normalized));
+        normalized = std::clamp(normalized, 0.0, 1.0);
         
         return static_cast<uint8_t>(255 - std::round(normalized * 255.0));
     }

@@ -1,6 +1,10 @@
 #include "modbus_ros2_control/grippers/changingtek_gripper.h"
 #include "modbus_ros2_control/communicator/modbus_rtu_communicator.h"
 #include "gripper_hardware_common/utils/ModbusConfig.h"
+#include "gripper_hardware_common/utils/CommandChangeDetector.h"
+#include "gripper_hardware_common/utils/PositionConverter.h"
+#include "gripper_hardware_common/utils/TorqueConverter.h"
+#include "gripper_hardware_common/utils/VelocityConverter.h"
 #include <unistd.h>
 #include <cmath>
 #include <utility>
@@ -71,6 +75,8 @@ namespace modbus_ros2_control
         {
             position_command_ = position_;
             last_command_ = position_;
+            last_applied_effort_command_ = effort_command_;
+            last_applied_velocity_command_ = velocity_command_;
             RCLCPP_INFO(logger_, "Changingtek gripper initialized, initial position: %.3f", position_);
         }
         else
@@ -79,6 +85,8 @@ namespace modbus_ros2_control
             position_ = 0.0;
             position_command_ = 0.0;
             last_command_ = 0.0;
+            last_applied_effort_command_ = effort_command_;
+            last_applied_velocity_command_ = velocity_command_;
         }
 
         initialized_ = true;
@@ -128,6 +136,39 @@ namespace modbus_ros2_control
         return true;
     }
 
+    bool ChangingtekGripper::writeRegisterChecked(const uint16_t addr, const uint16_t value, const char* label)
+    {
+        if (communicator_->writeRegister(addr, value))
+        {
+            return true;
+        }
+        RCLCPP_ERROR_THROTTLE(
+            logger_,
+            *clock_,
+            1000,
+            "Failed to write gripper %s: %s",
+            label,
+            communicator_->getLastError().c_str());
+        return false;
+    }
+
+    bool ChangingtekGripper::ensureProfileMotionRegisters()
+    {
+        if (profile_motion_registers_sent_)
+        {
+            return true;
+        }
+        if (!writeRegisterChecked(
+                Changingtek90C::ACCELERATION_REG, Changingtek90C::DEFAULT_ACCELERATION, "acceleration") ||
+            !writeRegisterChecked(
+                Changingtek90C::DECELERATION_REG, Changingtek90C::DEFAULT_DECELERATION, "deceleration"))
+        {
+            return false;
+        }
+        profile_motion_registers_sent_ = true;
+        return true;
+    }
+
     bool ChangingtekGripper::writeCommand()
     {
         if (!initialized_ || !communicator_)
@@ -135,20 +176,27 @@ namespace modbus_ros2_control
             return false;
         }
 
-        // 使用通用库的命令变化检测器
-        if (!CommandChangeDetector::hasChanged(position_command_, last_command_))
+        const bool pos_changed = CommandChangeDetector::hasChanged(position_command_, last_command_);
+        const bool eff_changed =
+            std::isnan(last_applied_effort_command_) ||
+            CommandChangeDetector::hasChanged(last_applied_effort_command_, effort_command_, 0.001);
+        const bool vel_changed =
+            std::isnan(last_applied_velocity_command_) ||
+            CommandChangeDetector::hasChanged(last_applied_velocity_command_, velocity_command_, 0.001);
+        if (!pos_changed && !eff_changed && !vel_changed)
         {
-            return false; // 命令未变化，无需发送
+            return false;
         }
 
-        // 使用通用库的位置转换器
-        uint16_t target_pos_mm = PositionConverter::Changingtek90::normalizedToModbus(position_command_);
+        const double trq_n = std::clamp(effort_command_, 0.0, 1.0);
+        const double vel_n = std::clamp(velocity_command_, 0.0, 1.0);
+        const int modbus_torque = TorqueConverter::Changingtek90::normalizedToModbus(trq_n);
+        const int vel_byte = VelocityConverter::Changingtek90::normalizedToVelocityRegister(vel_n);
+        const uint16_t vel_value = static_cast<uint16_t>(vel_byte);
+        const uint16_t trq_value = static_cast<uint16_t>(modbus_torque & 0xFFFF);
 
-        // 步骤1：设置目标位置（写入2个寄存器）
-        uint16_t pos_registers[2] = {
-            0x0000, // 高位寄存器
-            target_pos_mm // 低位寄存器
-        };
+        const uint16_t target_pos_mm = PositionConverter::Changingtek90::normalizedToModbus(position_command_);
+        const uint16_t pos_registers[2] = {0x0000, target_pos_mm};
 
         int rc = communicator_->writeRegisters(getPosRegAddr(), 2, pos_registers);
         if (rc != 2)
@@ -163,29 +211,48 @@ namespace modbus_ros2_control
             return false;
         }
 
-        // 延时确保数据写入（减少延时，因为写入在后台线程中）
-        usleep(100000); // 100ms（从500ms减少到100ms）
+        usleep(100000);
 
-        // 步骤2：触发运动
-        if (!communicator_->writeRegister(getTriggerRegAddr(), Changingtek90C::TRIGGER_VALUE))
+        // 加/减速度为固定配置，生命周期内只写一次
+        if (!ensureProfileMotionRegisters())
         {
-            RCLCPP_ERROR_THROTTLE(
-                logger_,
-                *clock_,
-                1000,
-                "Failed to trigger gripper movement: %s",
-                communicator_->getLastError().c_str()
-            );
+            return false;
+        }
+
+        if (vel_changed &&
+            !writeRegisterChecked(Changingtek90C::VELOCITY_REG, vel_value, "velocity"))
+        {
+            return false;
+        }
+        if (eff_changed && !writeRegisterChecked(Changingtek90C::TORQUE_REG, trq_value, "torque"))
+        {
+            return false;
+        }
+
+        if (!writeRegisterChecked(getTriggerRegAddr(), Changingtek90C::TRIGGER_VALUE, "trigger"))
+        {
             return false;
         }
 
         last_command_ = position_command_;
+        if (vel_changed)
+        {
+            last_applied_velocity_command_ = velocity_command_;
+        }
+        if (eff_changed)
+        {
+            last_applied_effort_command_ = effort_command_;
+        }
 
         RCLCPP_DEBUG(
             logger_,
-            "Gripper command sent: %.3f -> %u mm",
+            "Gripper command sent: pos=%.3f -> %u mm, vel_norm=%.3f->%u, trq_norm=%.3f->%u",
             position_command_,
-            target_pos_mm
+            target_pos_mm,
+            vel_n,
+            vel_value,
+            trq_n,
+            trq_value
         );
 
         return true;
@@ -197,6 +264,7 @@ namespace modbus_ros2_control
         {
             // 停止后台读取线程
             stopBackgroundReading();
+            profile_motion_registers_sent_ = false;
             initialized_ = false;
             communicator_ = nullptr;
         }

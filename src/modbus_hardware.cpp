@@ -117,6 +117,14 @@ namespace modbus_ros2_control
 
         RCLCPP_INFO(get_node()->get_logger(), "✅ Gripper initialized");
 
+        declareToolParameters();
+        param_callback_handle_ = get_node()->add_on_set_parameters_callback(
+            [this](const std::vector<rclcpp::Parameter>& parameters)
+            {
+                return onSetParameters(parameters);
+            });
+        syncToolDynamicsFromNodeParams();
+
         // 启动后台读取线程
         // 后台线程以20Hz频率持续读取状态和写入命令，避免阻塞控制循环
         gripper_->startBackgroundReading();
@@ -217,12 +225,55 @@ namespace modbus_ros2_control
             return hardware_interface::return_type::ERROR;
         }
 
-        // 写入操作现在由后台线程处理，这里不需要执行任何操作
-        // position_command_ 已经被 ROS2 Control 框架更新
-        // 后台线程会检测到变化并执行写入
-        // 这样避免了阻塞控制循环
-
         return hardware_interface::return_type::OK;
+    }
+
+    void ModbusHardware::declareToolParameters()
+    {
+        auto declare_if_missing = [this](const std::string& name, const auto& default_val)
+        {
+            if (!get_node()->has_parameter(name))
+            {
+                get_node()->declare_parameter(name, default_val);
+            }
+        };
+        declare_if_missing("tool_torque", 1.0);
+        declare_if_missing("tool_velocity", 1.0);
+    }
+
+    void ModbusHardware::syncToolDynamicsFromNodeParams()
+    {
+        if (!gripper_ || !gripper_->isInitialized())
+        {
+            return;
+        }
+        const double torque = get_node()->get_parameter("tool_torque").as_double();
+        const double velocity = get_node()->get_parameter("tool_velocity").as_double();
+        gripper_->applyToolDynamics(torque, velocity);
+    }
+
+    rcl_interfaces::msg::SetParametersResult ModbusHardware::onSetParameters(
+        const std::vector<rclcpp::Parameter>& parameters)
+    {
+        rcl_interfaces::msg::SetParametersResult result;
+        result.successful = true;
+        for (const auto& param : parameters)
+        {
+            if (param.get_name() != "tool_torque" && param.get_name() != "tool_velocity")
+            {
+                continue;
+            }
+            const double v = param.as_double();
+            if (v < 0.0 || v > 1.0)
+            {
+                result.successful = false;
+                result.reason = param.get_name() + " must be in [0.0, 1.0]";
+                return result;
+            }
+            syncToolDynamicsFromNodeParams();
+            RCLCPP_INFO(get_node()->get_logger(), "Updated %s = %.3f", param.get_name().c_str(), v);
+        }
+        return result;
     }
 
     void ModbusHardware::loadParameters(

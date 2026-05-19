@@ -263,10 +263,65 @@ namespace modbus_ros2_control
             RCLCPP_WARN(get_node()->get_logger(), "Failed to read positions for synchronization");
         }
 
+        declareToolDynamicsParameters();
+        param_callback_handle_ = get_node()->add_on_set_parameters_callback(
+            [this](const std::vector<rclcpp::Parameter>& parameters)
+            {
+                return onSetParameters(parameters);
+            });
+        syncToolDynamicsFromNodeParams();
+
         // 启动后台读取线程
         hand_->startBackgroundReading();
 
         return hardware_interface::CallbackReturn::SUCCESS;
+    }
+
+    void DexterousHandHardware::declareToolDynamicsParameters()
+    {
+        if (!get_node()->has_parameter("tool_torque"))
+        {
+            get_node()->declare_parameter<double>("tool_torque", 1.0);
+        }
+        if (!get_node()->has_parameter("tool_velocity"))
+        {
+            get_node()->declare_parameter<double>("tool_velocity", 1.0);
+        }
+    }
+
+    void DexterousHandHardware::syncToolDynamicsFromNodeParams()
+    {
+        if (!hand_)
+        {
+            return;
+        }
+        const double torque = get_node()->get_parameter("tool_torque").as_double();
+        const double velocity = get_node()->get_parameter("tool_velocity").as_double();
+        hand_->applyToolDynamics(torque, velocity);
+    }
+
+    rcl_interfaces::msg::SetParametersResult DexterousHandHardware::onSetParameters(
+        const std::vector<rclcpp::Parameter>& parameters)
+    {
+        rcl_interfaces::msg::SetParametersResult result;
+        result.successful = true;
+        for (const auto& param : parameters)
+        {
+            if (param.get_name() != "tool_torque" && param.get_name() != "tool_velocity")
+            {
+                continue;
+            }
+            const double v = param.as_double();
+            if (v < 0.0 || v > 1.0)
+            {
+                result.successful = false;
+                result.reason = param.get_name() + " must be in [0.0, 1.0]";
+                return result;
+            }
+            syncToolDynamicsFromNodeParams();
+            RCLCPP_INFO(get_node()->get_logger(), "Updated %s = %.3f (all joints)", param.get_name().c_str(), v);
+        }
+        return result;
     }
 
     hardware_interface::CallbackReturn DexterousHandHardware::on_deactivate(
@@ -358,7 +413,7 @@ namespace modbus_ros2_control
             return hardware_interface::return_type::ERROR;
         }
 
-        // 写入操作由后台线程处理，这里不需要执行任何操作
+        syncToolDynamicsFromNodeParams();
         return hardware_interface::return_type::OK;
     }
 

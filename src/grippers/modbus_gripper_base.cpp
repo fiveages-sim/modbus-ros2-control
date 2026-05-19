@@ -1,5 +1,7 @@
 #include "modbus_ros2_control/grippers/modbus_gripper_base.h"
+#include "gripper_hardware_common/utils/CommandChangeDetector.h"
 #include <algorithm>
+#include <cmath>
 #include <cctype>
 #include <utility>
 #include <chrono>
@@ -59,18 +61,6 @@ namespace modbus_ros2_control
                 joint_name_, hardware_interface::HW_IF_POSITION, getPositionPtr()
             )
         );
-
-        state_interfaces.push_back(
-            std::make_shared<hardware_interface::StateInterface>(
-                joint_name_, hardware_interface::HW_IF_VELOCITY, getVelocityPtr()
-            )
-        );
-
-        state_interfaces.push_back(
-            std::make_shared<hardware_interface::StateInterface>(
-                joint_name_, hardware_interface::HW_IF_EFFORT, getEffortPtr()
-            )
-        );
     }
 
     void ModbusGripperBase::exportCommandInterfaces(
@@ -82,6 +72,14 @@ namespace modbus_ros2_control
                 joint_name_, hardware_interface::HW_IF_POSITION, getPositionCommandPtr()
             )
         );
+    }
+
+    void ModbusGripperBase::applyToolDynamics(const double torque, const double velocity)
+    {
+        effort_command_ = std::clamp(torque, 0.0, 1.0);
+        velocity_command_ = std::clamp(velocity, 0.0, 1.0);
+        last_applied_effort_command_ = std::numeric_limits<double>::quiet_NaN();
+        last_applied_velocity_command_ = std::numeric_limits<double>::quiet_NaN();
     }
 
     void ModbusGripperBase::startBackgroundReading()
@@ -167,19 +165,32 @@ namespace modbus_ros2_control
             int current_interval_ms = loop_interval_ms_.load();
 
             // 首先检查是否有新命令需要写入
-            // 使用原子比较：如果 position_command_ 与 last_command_ 不同，说明有新命令
-            double current_command = position_command_; // 原子读取
-            if (current_command != last_command_)
+            using gripper_hardware_common::CommandChangeDetector;
+            const double pos = position_command_;
+            const double eff = effort_command_;
+            const double vel = velocity_command_;
+            const bool pos_changed = (pos != last_command_);
+            const bool eff_changed =
+                std::isnan(last_applied_effort_command_) ||
+                CommandChangeDetector::hasChanged(last_applied_effort_command_, eff, 0.001);
+            const bool vel_changed =
+                std::isnan(last_applied_velocity_command_) ||
+                CommandChangeDetector::hasChanged(last_applied_velocity_command_, vel, 0.001);
+            if (pos_changed || eff_changed || vel_changed)
             {
                 // 有新命令，执行写入
                 if (writeCommand())
                 {
+                    last_applied_effort_command_ = eff;
+                    last_applied_velocity_command_ = vel;
                     RCLCPP_DEBUG_THROTTLE(
                         logger_,
                         *clock_,
                         1000,
-                        "Background write command: %.3f",
-                        current_command
+                        "Background write command: pos=%.3f eff=%.3f vel=%.3f",
+                        pos,
+                        eff,
+                        vel
                     );
                 }
                 else

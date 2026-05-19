@@ -90,6 +90,12 @@ namespace modbus_ros2_control
         ) override;
 
     private:
+        void declareToolDynamicsParameters();
+        void syncToolDynamicsFromNodeParams();
+        rcl_interfaces::msg::SetParametersResult onSetParameters(
+            const std::vector<rclcpp::Parameter>& parameters);
+        rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
+
         // Modbus 通信器
         std::unique_ptr<ModbusRtuCommunicator> modbus_communicator_;
 

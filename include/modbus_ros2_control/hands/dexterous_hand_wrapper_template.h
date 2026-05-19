@@ -41,20 +41,20 @@ namespace modbus_ros2_control
     struct DexterousHandProductTraits<DexterousHandProduct::O7>
     {
         static constexpr size_t JOINT_COUNT = 7;
+        /** FC16 写保持寄存器 / FC04 读输入寄存器：位置 0-6 */
         static constexpr uint16_t JOINT_POSITION_REG_START = 0;
+        /** 力矩 7-13（O7 协议） */
+        static constexpr uint16_t JOINT_TORQUE_REG_START = 7;
+        /** 速度 14-20（O7 协议） */
+        static constexpr uint16_t JOINT_SPEED_REG_START = 14;
         static constexpr const char* PRODUCT_NAME = "O7";
-        
+
         /**
          * @brief Map joint name to Modbus register index for O7 hand
-         * 
-         * Register mapping:
-         * 0: Thumb_Pitch (thumb_joint3)
-         * 1: Thumb_Yaw (thumb_joint2)
-         * 2: Index_Pitch
-         * 3: Middle_Pitch
-         * 4: Ring_Pitch
-         * 5: Little_Pitch
-         * 6: Thumb_Roll (thumb_joint1)
+         *
+         * FC16/FC04 关节顺序（O7 协议 1.3）：
+         * 0 Thumb_Pitch, 1 Thumb_Yaw, 2 Index, 3 Middle, 4 Ring, 5 Little, 6 Thumb_Roll
+         * URDF: thumb_joint1=Pitch, thumb_joint2=Yaw, thumb_joint3=Roll
          */
         static int getModbusRegisterIndex(const std::string& joint_name);
     };
@@ -70,7 +70,12 @@ namespace modbus_ros2_control
     struct DexterousHandProductTraits<DexterousHandProduct::O6>
     {
         static constexpr size_t JOINT_COUNT = 6;
-        static constexpr uint16_t JOINT_POSITION_REG_START = 0;  // Input Registers 0-5 for position
+        /** FC04/FC16：位置 0-5 */
+        static constexpr uint16_t JOINT_POSITION_REG_START = 0;
+        /** 力矩 6-11（O6 协议，紧接位置区） */
+        static constexpr uint16_t JOINT_TORQUE_REG_START = 6;
+        /** 速度 12-17（O6 协议） */
+        static constexpr uint16_t JOINT_SPEED_REG_START = 12;
         static constexpr const char* PRODUCT_NAME = "O6";
         
         /**
@@ -106,6 +111,8 @@ namespace modbus_ros2_control
     {
         static constexpr size_t JOINT_COUNT = 6;
         static constexpr uint16_t JOINT_POSITION_REG_START = 0;
+        static constexpr uint16_t JOINT_TORQUE_REG_START = 6;
+        static constexpr uint16_t JOINT_SPEED_REG_START = 12;
         static constexpr const char* PRODUCT_NAME = "L6";
         
         /**

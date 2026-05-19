@@ -13,6 +13,8 @@
 #include <vector>
 #include <unordered_map>
 
+#include <rcl_interfaces/msg/set_parameters_result.hpp>
+
 namespace modbus_ros2_control {
 
 /**
@@ -117,6 +119,13 @@ private:
      * @return 是否创建成功
      */
     bool createGripper();
+
+    void declareToolParameters();
+    void syncToolDynamicsFromNodeParams();
+    rcl_interfaces::msg::SetParametersResult onSetParameters(
+        const std::vector<rclcpp::Parameter>& parameters);
+
+    rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
 };
 
 } // namespace modbus_ros2_control
