@@ -61,6 +61,16 @@ namespace modbus_ros2_control
                 joint_name_, hardware_interface::HW_IF_POSITION, getPositionPtr()
             )
         );
+        state_interfaces.push_back(
+            std::make_shared<hardware_interface::StateInterface>(
+                joint_name_, hardware_interface::HW_IF_VELOCITY, getVelocityPtr()
+            )
+        );
+        state_interfaces.push_back(
+            std::make_shared<hardware_interface::StateInterface>(
+                joint_name_, hardware_interface::HW_IF_EFFORT, getEffortPtr()
+            )
+        );
     }
 
     void ModbusGripperBase::exportCommandInterfaces(

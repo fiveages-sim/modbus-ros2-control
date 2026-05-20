@@ -95,6 +95,22 @@ namespace modbus_ros2_control
                     joint_names_[i], hardware_interface::HW_IF_POSITION, getPositionPtr(i)
                 )
             );
+            if (double* vel = getVelocityPtr(i))
+            {
+                state_interfaces.push_back(
+                    std::make_shared<hardware_interface::StateInterface>(
+                        joint_names_[i], hardware_interface::HW_IF_VELOCITY, vel
+                    )
+                );
+            }
+            if (double* eff = getEffortPtr(i))
+            {
+                state_interfaces.push_back(
+                    std::make_shared<hardware_interface::StateInterface>(
+                        joint_names_[i], hardware_interface::HW_IF_EFFORT, eff
+                    )
+                );
+            }
         }
     }
 
