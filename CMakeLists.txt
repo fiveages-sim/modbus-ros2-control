@@ -51,9 +51,13 @@ target_include_directories(${PROJECT_NAME} PUBLIC
         $<INSTALL_INTERFACE:include>
 )
 
-ament_target_dependencies(
-        ${PROJECT_NAME} PUBLIC
-        ${THIS_PACKAGE_INCLUDE_DEPENDS}
+target_link_libraries(${PROJECT_NAME} PUBLIC
+        ${hardware_interface_TARGETS}
+        ${pluginlib_TARGETS}
+        ${rclcpp_TARGETS}
+        ${rclcpp_lifecycle_TARGETS}
+        gripper_hardware_common::gripper_hardware_common
+        arms_controller_common::arms_controller_common
 )
 
 # Link libmodbus
