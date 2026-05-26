@@ -43,6 +43,8 @@ add_library(
         src/modbus_hardware.cpp
         src/hands/dexterous_hand_base.cpp
         src/hands/linkerhand/dexterous_hand_hardware.cpp
+        src/hands/freedom/freedom_rs485_hardware.cpp
+        src/hands/inspire/inspire_hand_hardware.cpp
 )
 
 target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
@@ -84,4 +86,3 @@ endif()
 ament_export_dependencies(${THIS_PACKAGE_INCLUDE_DEPENDS})
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_package()
-

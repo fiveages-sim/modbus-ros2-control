@@ -20,5 +20,22 @@
             Function codes: 04 (read), 16 (write)
         </description>
     </class>
+    <class name="modbus_ros2_control/FreedomRS485Hardware"
+           type="modbus_ros2_control::FreedomRS485Hardware"
+           base_class_type="hardware_interface::SystemInterface">
+        <description>
+            ROS2 Control Hardware Interface for Freedom dexterous hand over its custom RS485 protocol.
+            Defaults: /dev/ttyUSB0, slave ID 1, baudrate 115200, 8N1.
+            Commands: 0x10 motion control, 0xF1 angle query.
+        </description>
+    </class>
+    <class name="modbus_ros2_control/InspireHandHardware"
+           type="modbus_ros2_control::InspireHandHardware"
+           base_class_type="hardware_interface::SystemInterface">
+        <description>
+            ROS2 Control Hardware Interface for Inspire RH56 series dexterous hand over standard Modbus RTU.
+            Defaults: /dev/ttyUSB0, slave ID 1, baudrate 115200, 8N1.
+            Function codes: 03 (read holding registers), 10 (write multiple registers).
+        </description>
+    </class>
 </library>
-
