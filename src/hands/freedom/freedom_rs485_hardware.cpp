@@ -296,7 +296,7 @@ void FreedomRS485Hardware::load_parameters()
   std::transform(side_lower.begin(), side_lower.end(), side_lower.begin(), [](unsigned char c) {
     return static_cast<char>(std::tolower(c));
   });
-  const auto side_default_slave_id = side_lower == "right" || side_lower == "right_hand" ? 0 : 1;
+  const auto side_default_slave_id = side_lower == "right" || side_lower == "right_hand" ? 1 : 0;
   const auto slave_id_value = get_parameter("slave_id", "auto");
   if (slave_id_value == "auto" || slave_id_value == "AUTO" || slave_id_value.empty())
   {
