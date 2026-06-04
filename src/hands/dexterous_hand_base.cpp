@@ -40,9 +40,9 @@ namespace modbus_ros2_control
                 }
             }
         }
-        for(int i =0; i < hand_joints.size(); i++)
+        for (const auto& joint_name : hand_joints)
         {
-            std::cout << "Detected hand joint: %s" << hand_joints[i] << std::endl;
+            std::cout << "Detected hand joint: %s" << joint_name << std::endl;
         }
         // 如果找到的关节数量正好是7个（O7）或6个（O6），返回它们
         if (hand_joints.size() == 7 || hand_joints.size() == 6)
