@@ -64,17 +64,36 @@ hardware_interface::CallbackReturn FreedomRS485Hardware::on_init(
     return hardware_interface::CallbackReturn::ERROR;
   }
 
-  if (info_.joints.size() != kJointCount)
+  load_parameters();
+
+  if (protocol_version_ == "auto")
+  {
+    joint_count_ = info_.joints.size() == kV2JointCount ? kV2JointCount : kV1JointCount;
+    protocol_version_ = joint_count_ == kV2JointCount ? "freedomv2" : "freedomv1";
+  }
+  else if (
+    protocol_version_ == "freedomv2" || protocol_version_ == "freedom_v2" ||
+    protocol_version_ == "v2")
+  {
+    joint_count_ = kV2JointCount;
+  }
+  else
+  {
+    joint_count_ = kV1JointCount;
+  }
+
+  if (info_.joints.size() != joint_count_)
   {
     RCLCPP_ERROR(
       rclcpp::get_logger(kLoggerName),
-      "Freedom RS485 hardware expects exactly %zu joints, got %zu",
-      kJointCount,
+      "Freedom RS485 hardware protocol %s expects exactly %zu joints, got %zu",
+      protocol_version_.c_str(),
+      joint_count_,
       info_.joints.size());
     return hardware_interface::CallbackReturn::ERROR;
   }
 
-  joint_names_.reserve(kJointCount);
+  joint_names_.reserve(joint_count_);
   for (const auto& joint : info_.joints)
   {
     joint_names_.push_back(joint.name);
@@ -85,10 +104,10 @@ hardware_interface::CallbackReturn FreedomRS485Hardware::on_init(
     return hardware_interface::CallbackReturn::ERROR;
   }
 
-  load_parameters();
+  lower_limits_ = default_lower_limits(joint_names_);
   upper_limits_ = default_upper_limits(joint_names_);
 
-  for (std::size_t i = 0; i < kJointCount; ++i)
+  for (std::size_t i = 0; i < joint_count_; ++i)
   {
     hw_positions_[i] = std::clamp(
       initial_value_for_joint(info_.joints[i]), lower_limits_[i], upper_limits_[i]);
@@ -101,7 +120,9 @@ hardware_interface::CallbackReturn FreedomRS485Hardware::on_init(
 
   RCLCPP_INFO(
     rclcpp::get_logger(kLoggerName),
-    "Configured Freedom RS485 hardware: port=%s, baudrate=%d, id=%u, feedback=%s",
+    "Configured Freedom RS485 hardware: protocol=%s, joints=%zu, port=%s, baudrate=%d, id=%u, feedback=%s",
+    protocol_version_.c_str(),
+    joint_count_,
     serial_port_.c_str(),
     baudrate_,
     slave_id_,
@@ -122,7 +143,7 @@ hardware_interface::CallbackReturn FreedomRS485Hardware::on_activate(
   pending_command_valid_ = false;
   pending_command_dirty_ = false;
   feedback_positions_valid_ = false;
-  for (std::size_t i = 0; i < kJointCount; ++i)
+  for (std::size_t i = 0; i < joint_count_; ++i)
   {
     hw_commands_[i] = hw_positions_[i];
     last_command_angles_[i] = radians_to_protocol_angle(hw_commands_[i], i);
@@ -130,10 +151,10 @@ hardware_interface::CallbackReturn FreedomRS485Hardware::on_activate(
     feedback_positions_[i] = hw_positions_[i];
   }
 
-  std::array<double, kJointCount> initial_positions{};
+  std::array<double, kMaxJointCount> initial_positions{};
   if (read_feedback_ && query_positions(initial_positions))
   {
-    for (std::size_t i = 0; i < kJointCount; ++i)
+    for (std::size_t i = 0; i < joint_count_; ++i)
     {
       hw_positions_[i] = initial_positions[i];
       hw_commands_[i] = hw_positions_[i];
@@ -167,9 +188,9 @@ std::vector<hardware_interface::StateInterface::ConstSharedPtr>
 FreedomRS485Hardware::on_export_state_interfaces()
 {
   std::vector<hardware_interface::StateInterface::ConstSharedPtr> state_interfaces;
-  state_interfaces.reserve(kJointCount * 3);
+  state_interfaces.reserve(joint_count_ * 3);
 
-  for (std::size_t i = 0; i < kJointCount; ++i)
+  for (std::size_t i = 0; i < joint_count_; ++i)
   {
     state_interfaces.push_back(
       std::make_shared<hardware_interface::StateInterface>(
@@ -189,9 +210,9 @@ std::vector<hardware_interface::CommandInterface::SharedPtr>
 FreedomRS485Hardware::on_export_command_interfaces()
 {
   std::vector<hardware_interface::CommandInterface::SharedPtr> command_interfaces;
-  command_interfaces.reserve(kJointCount);
+  command_interfaces.reserve(joint_count_);
 
-  for (std::size_t i = 0; i < kJointCount; ++i)
+  for (std::size_t i = 0; i < joint_count_; ++i)
   {
     command_interfaces.push_back(
       std::make_shared<hardware_interface::CommandInterface>(
@@ -226,7 +247,7 @@ hardware_interface::return_type FreedomRS485Hardware::read(
   }
 
   const double dt = period.seconds();
-  for (std::size_t i = 0; i < kJointCount; ++i)
+  for (std::size_t i = 0; i < joint_count_; ++i)
   {
     hw_efforts_[i] = 0.0;
     hw_velocities_[i] = dt > std::numeric_limits<double>::epsilon()
@@ -246,8 +267,8 @@ hardware_interface::return_type FreedomRS485Hardware::write(
     return hardware_interface::return_type::ERROR;
   }
 
-  std::array<uint8_t, kJointCount> angles{};
-  for (std::size_t i = 0; i < kJointCount; ++i)
+  std::array<uint8_t, kMaxJointCount> angles{};
+  for (std::size_t i = 0; i < joint_count_; ++i)
   {
     hw_commands_[i] = std::clamp(hw_commands_[i], lower_limits_[i], upper_limits_[i]);
     angles[i] = radians_to_protocol_angle(hw_commands_[i], i);
@@ -277,6 +298,7 @@ void FreedomRS485Hardware::load_parameters()
 
   serial_port_ = get_parameter("serial_port", serial_port_);
   hand_side_ = get_parameter("hand_side", hand_side_);
+  protocol_version_ = get_parameter("protocol_version", protocol_version_);
   baudrate_ = parse_int(get_parameter("baudrate", std::to_string(baudrate_)), baudrate_);
   feedback_timeout_ms_ = std::max(
     0, parse_int(get_parameter("feedback_timeout_ms", std::to_string(feedback_timeout_ms_)),
@@ -289,6 +311,14 @@ void FreedomRS485Hardware::load_parameters()
               command_deadband_deg_),
     0,
     static_cast<int>(kMaxProtocolAngle));
+  command_speed_ = static_cast<uint8_t>(std::clamp(
+    parse_int(get_parameter("command_speed", std::to_string(command_speed_)), command_speed_),
+    0,
+    255));
+  current_limit_ = static_cast<uint8_t>(std::clamp(
+    parse_int(get_parameter("current_limit", std::to_string(current_limit_)), current_limit_),
+    0,
+    255));
   read_feedback_ = parse_bool(
     get_parameter("read_feedback", read_feedback_ ? "true" : "false"), read_feedback_);
 
@@ -439,7 +469,7 @@ void FreedomRS485Hardware::background_loop()
 
     if (read_feedback_)
     {
-      std::array<double, kJointCount> positions{};
+      std::array<double, kMaxJointCount> positions{};
       if (query_positions(positions))
       {
         std::lock_guard<std::mutex> lock(feedback_mutex_);
@@ -457,7 +487,7 @@ void FreedomRS485Hardware::background_loop()
       }
     }
 
-    std::array<uint8_t, kJointCount> angles{};
+    std::array<uint8_t, kMaxJointCount> angles{};
     bool should_send = false;
     {
       std::lock_guard<std::mutex> lock(command_mutex_);
@@ -577,13 +607,28 @@ bool FreedomRS485Hardware::read_frame(std::vector<uint8_t>& frame, int timeout_m
     }
 
     frame.push_back(byte);
-    if (frame.size() == 4 && frame[3] < 7)
+    if (!protocol_is_v2() && frame.size() == 4 && frame[3] < 7)
     {
       frame.clear();
       continue;
     }
 
-    if (frame.size() >= 4 && frame.size() == frame[3])
+    if (protocol_is_v2() && frame.size() == 5)
+    {
+      const auto frame_length =
+        (static_cast<std::size_t>(frame[3]) << 8) | static_cast<std::size_t>(frame[4]);
+      if (frame_length < 8)
+      {
+        frame.clear();
+        continue;
+      }
+    }
+
+    const auto frame_length = protocol_is_v2() && frame.size() >= 5
+                                ? ((static_cast<std::size_t>(frame[3]) << 8) |
+                                   static_cast<std::size_t>(frame[4]))
+                                : (frame.size() >= 4 ? static_cast<std::size_t>(frame[3]) : 0);
+    if (frame_length > 0 && frame.size() == frame_length)
     {
       return frame.back() == kFrameTail && checksum(frame) == frame[frame.size() - 2];
     }
@@ -592,17 +637,33 @@ bool FreedomRS485Hardware::read_frame(std::vector<uint8_t>& frame, int timeout_m
   return false;
 }
 
-bool FreedomRS485Hardware::query_positions(std::array<double, kJointCount>& positions)
+bool FreedomRS485Hardware::query_positions(std::array<double, kMaxJointCount>& positions)
 {
-  std::vector<uint8_t> query = {
-    kFrameHead,
-    slave_id_,
-    kAngleQueryCommand,
-    kQueryFrameLength,
-    kHostToDevice,
-    0x00,
-    0x00,
-    kFrameTail};
+  std::vector<uint8_t> query;
+  if (protocol_is_v2())
+  {
+    query = {
+      kFrameHead,
+      slave_id_,
+      kAngleQueryCommand,
+      0x00,
+      kV2QueryFrameLength,
+      0x00,
+      0x00,
+      kFrameTail};
+  }
+  else
+  {
+    query = {
+      kFrameHead,
+      slave_id_,
+      kAngleQueryCommand,
+      kV1QueryFrameLength,
+      kHostToDevice,
+      0x00,
+      0x00,
+      kFrameTail};
+  }
   query[query.size() - 2] = checksum(query);
 
   tcflush(serial_fd_, TCIFLUSH);
@@ -611,51 +672,92 @@ bool FreedomRS485Hardware::query_positions(std::array<double, kJointCount>& posi
     return false;
   }
 
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(feedback_timeout_ms_);
   std::vector<uint8_t> response;
-  if (!read_frame(response, feedback_timeout_ms_))
+  while (std::chrono::steady_clock::now() <= deadline)
   {
-    return false;
+    const auto remaining_ms = std::max(
+      1,
+      static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                         deadline - std::chrono::steady_clock::now())
+                         .count()));
+    if (!read_frame(response, remaining_ms))
+    {
+      return false;
+    }
+
+    const bool valid_response = protocol_is_v2()
+                                  ? (response.size() == kV2AngleResponseLength &&
+                                     response[1] == slave_id_ &&
+                                     response[2] == kAngleQueryCommand)
+                                  : (response.size() == kV1AngleResponseLength &&
+                                     response[1] == slave_id_ &&
+                                     response[2] == kAngleQueryCommand &&
+                                     response[4] == kDeviceToHost);
+    if (!valid_response)
+    {
+      RCLCPP_DEBUG_THROTTLE(
+        rclcpp::get_logger(kLoggerName),
+        *get_node()->get_clock(),
+        1000,
+        "Ignoring non-feedback Freedom RS485 frame while querying ID %u: size=%zu, command=0x%02x",
+        slave_id_,
+        response.size(),
+        response.size() > 2 ? response[2] : 0);
+      continue;
+    }
+
+    for (std::size_t i = 0; i < joint_count_; ++i)
+    {
+      positions[i] = protocol_angle_to_radians(response[5 + i], i);
+    }
+
+    return true;
   }
 
-  if (response.size() != kAngleResponseLength ||
-      response[1] != slave_id_ ||
-      response[2] != kAngleQueryCommand ||
-      response[4] != kDeviceToHost)
-  {
-    return false;
-  }
-
-  for (std::size_t i = 0; i < kJointCount; ++i)
-  {
-    positions[i] = protocol_angle_to_radians(response[5 + i], i);
-  }
-
-  return true;
+  return false;
 }
 
 bool FreedomRS485Hardware::send_position_command(
-  const std::array<uint8_t, kJointCount>& angles)
+  const std::array<uint8_t, kMaxJointCount>& angles)
 {
-  std::vector<uint8_t> frame = {
-    kFrameHead,
-    slave_id_,
-    kMoveCommand,
-    kMoveFrameLength,
-    kHostToDevice,
-    0x01,
-    angles[0],
-    0x01,
-    angles[1],
-    0x01,
-    angles[2],
-    0x01,
-    angles[3],
-    0x01,
-    angles[4],
-    0x01,
-    angles[5],
-    0x00,
-    kFrameTail};
+  std::vector<uint8_t> frame;
+  if (protocol_is_v2())
+  {
+    frame = {kFrameHead, slave_id_, kV2MoveCommand, 0x00, kV2MoveFrameLength};
+    for (std::size_t i = 0; i < joint_count_; ++i)
+    {
+      frame.push_back(angles[i]);
+      frame.push_back(command_speed_);
+      frame.push_back(current_limit_);
+    }
+    frame.push_back(0x00);
+    frame.push_back(kFrameTail);
+  }
+  else
+  {
+    frame = {
+      kFrameHead,
+      slave_id_,
+      kV1MoveCommand,
+      kV1MoveFrameLength,
+      kHostToDevice,
+      0x01,
+      angles[0],
+      0x01,
+      angles[1],
+      0x01,
+      angles[2],
+      0x01,
+      angles[3],
+      0x01,
+      angles[4],
+      0x01,
+      angles[5],
+      0x00,
+      kFrameTail};
+  }
   frame[frame.size() - 2] = checksum(frame);
   return send_frame(frame);
 }
@@ -693,9 +795,9 @@ double FreedomRS485Hardware::protocol_angle_to_radians(
 }
 
 bool FreedomRS485Hardware::command_changed(
-  const std::array<uint8_t, kJointCount>& angles) const
+  const std::array<uint8_t, kMaxJointCount>& angles) const
 {
-  for (std::size_t i = 0; i < kJointCount; ++i)
+  for (std::size_t i = 0; i < joint_count_; ++i)
   {
     if (std::abs(static_cast<int>(angles[i]) - static_cast<int>(last_command_angles_[i])) >
         command_deadband_deg_)
@@ -704,6 +806,11 @@ bool FreedomRS485Hardware::command_changed(
     }
   }
   return false;
+}
+
+bool FreedomRS485Hardware::protocol_is_v2() const
+{
+  return joint_count_ == kV2JointCount;
 }
 
 uint8_t FreedomRS485Hardware::checksum(const std::vector<uint8_t>& frame)
@@ -766,15 +873,57 @@ double FreedomRS485Hardware::initial_value_for_joint(
   return 0.0;
 }
 
-std::array<double, FreedomRS485Hardware::kJointCount> FreedomRS485Hardware::default_upper_limits(
+std::array<double, FreedomRS485Hardware::kMaxJointCount>
+FreedomRS485Hardware::default_lower_limits(
   const std::vector<std::string>& joint_names)
 {
-  std::array<double, kJointCount> limits{0.785, 0.29, 1.24, 1.24, 1.24, 1.24};
+  std::array<double, kMaxJointCount> limits{};
+  const bool is_v2 = joint_names.size() == kV2JointCount;
 
-  for (std::size_t i = 0; i < std::min(kJointCount, joint_names.size()); ++i)
+  if (is_v2)
+  {
+    for (std::size_t i = 0; i < std::min(kMaxJointCount, joint_names.size()); ++i)
+    {
+      if (has_suffix(joint_names[i], "thumb_joint1"))
+      {
+        limits[i] = -0.4363;
+      }
+    }
+  }
+
+  return limits;
+}
+
+std::array<double, FreedomRS485Hardware::kMaxJointCount> FreedomRS485Hardware::default_upper_limits(
+  const std::vector<std::string>& joint_names)
+{
+  std::array<double, kMaxJointCount> limits{0.785, 0.29, 1.24, 1.24, 1.24, 1.24, 0.0, 0.0, 0.0};
+  const bool is_v2 = joint_names.size() == kV2JointCount;
+
+  for (std::size_t i = 0; i < std::min(kMaxJointCount, joint_names.size()); ++i)
   {
     const auto& name = joint_names[i];
-    if (has_suffix(name, "thumb_joint1"))
+    if (is_v2 && has_suffix(name, "thumb_joint1"))
+    {
+      limits[i] = 0.43663;
+    }
+    else if (is_v2 && has_suffix(name, "thumb_joint2"))
+    {
+      limits[i] = 1.3786;
+    }
+    else if (is_v2 && has_suffix(name, "thumb_joint3"))
+    {
+      limits[i] = 0.4537;
+    }
+    else if (is_v2 && (has_suffix(name, "index_dip") || has_suffix(name, "middle_dip")))
+    {
+      limits[i] = 1.204;
+    }
+    else if (is_v2)
+    {
+      limits[i] = 1.396;
+    }
+    else if (has_suffix(name, "thumb_joint1"))
     {
       limits[i] = 0.785;
     }
