@@ -45,8 +45,9 @@ public:
 
 private:
   static constexpr std::size_t kV1JointCount = 6;
-  static constexpr std::size_t kV2JointCount = 9;
-  static constexpr std::size_t kMaxJointCount = kV2JointCount;
+  static constexpr std::size_t kV2JointCount = 7;
+  static constexpr std::size_t kV2ProtocolJointCount = 9;
+  static constexpr std::size_t kMaxJointCount = kV2ProtocolJointCount;
   static constexpr uint8_t kFrameHead = 0x5A;
   static constexpr uint8_t kFrameTail = 0x5D;
   static constexpr uint8_t kHostToDevice = 0x00;
@@ -79,6 +80,7 @@ private:
   double protocol_angle_to_radians(uint8_t angle, std::size_t joint_index) const;
   bool command_changed(const std::array<uint8_t, kMaxJointCount>& angles) const;
   bool protocol_is_v2() const;
+  static std::size_t v2_protocol_index(std::size_t joint_index);
 
   static uint8_t checksum(const std::vector<uint8_t>& frame);
   static bool parse_bool(const std::string& value, bool default_value);
@@ -112,7 +114,7 @@ private:
 
   std::vector<std::string> joint_names_;
   std::array<double, kMaxJointCount> lower_limits_{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-  std::array<double, kMaxJointCount> upper_limits_{0.785, 0.29, 1.24, 1.24, 1.24, 1.24, 0.0, 0.0, 0.0};
+  std::array<double, kMaxJointCount> upper_limits_{0.785, 0.29, 1.24, 1.24, 1.24, 1.24, 1.24, 0.0, 0.0};
   std::array<double, kMaxJointCount> hw_positions_{};
   std::array<double, kMaxJointCount> previous_positions_{};
   std::array<double, kMaxJointCount> hw_velocities_{};

@@ -710,7 +710,8 @@ bool FreedomRS485Hardware::query_positions(std::array<double, kMaxJointCount>& p
 
     for (std::size_t i = 0; i < joint_count_; ++i)
     {
-      positions[i] = protocol_angle_to_radians(response[5 + i], i);
+      const auto protocol_index = protocol_is_v2() ? v2_protocol_index(i) : i;
+      positions[i] = protocol_angle_to_radians(response[5 + protocol_index], i);
     }
 
     return true;
@@ -726,9 +727,14 @@ bool FreedomRS485Hardware::send_position_command(
   if (protocol_is_v2())
   {
     frame = {kFrameHead, slave_id_, kV2MoveCommand, 0x00, kV2MoveFrameLength};
+    std::array<uint8_t, kV2ProtocolJointCount> protocol_angles{};
     for (std::size_t i = 0; i < joint_count_; ++i)
     {
-      frame.push_back(angles[i]);
+      protocol_angles[v2_protocol_index(i)] = angles[i];
+    }
+    for (std::size_t i = 0; i < kV2ProtocolJointCount; ++i)
+    {
+      frame.push_back(protocol_angles[i]);
       frame.push_back(command_speed_);
       frame.push_back(current_limit_);
     }
@@ -811,6 +817,12 @@ bool FreedomRS485Hardware::command_changed(
 bool FreedomRS485Hardware::protocol_is_v2() const
 {
   return joint_count_ == kV2JointCount;
+}
+
+std::size_t FreedomRS485Hardware::v2_protocol_index(std::size_t joint_index)
+{
+  constexpr std::array<std::size_t, kV2JointCount> kControlToProtocol{0, 1, 2, 4, 6, 7, 8};
+  return joint_index < kControlToProtocol.size() ? kControlToProtocol[joint_index] : joint_index;
 }
 
 uint8_t FreedomRS485Hardware::checksum(const std::vector<uint8_t>& frame)
@@ -897,7 +909,7 @@ FreedomRS485Hardware::default_lower_limits(
 std::array<double, FreedomRS485Hardware::kMaxJointCount> FreedomRS485Hardware::default_upper_limits(
   const std::vector<std::string>& joint_names)
 {
-  std::array<double, kMaxJointCount> limits{0.785, 0.29, 1.24, 1.24, 1.24, 1.24, 0.0, 0.0, 0.0};
+  std::array<double, kMaxJointCount> limits{0.785, 0.29, 1.24, 1.24, 1.24, 1.24, 1.24, 0.0, 0.0};
   const bool is_v2 = joint_names.size() == kV2JointCount;
 
   for (std::size_t i = 0; i < std::min(kMaxJointCount, joint_names.size()); ++i)
@@ -914,10 +926,6 @@ std::array<double, FreedomRS485Hardware::kMaxJointCount> FreedomRS485Hardware::d
     else if (is_v2 && has_suffix(name, "thumb_joint3"))
     {
       limits[i] = 0.4537;
-    }
-    else if (is_v2 && (has_suffix(name, "index_dip") || has_suffix(name, "middle_dip")))
-    {
-      limits[i] = 1.204;
     }
     else if (is_v2)
     {
