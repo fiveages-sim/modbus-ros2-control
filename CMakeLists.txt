@@ -45,6 +45,7 @@ add_library(
         src/hands/linkerhand/dexterous_hand_hardware.cpp
         src/hands/freedom/freedom_rs485_hardware.cpp
         src/hands/inspire/inspire_hand_hardware.cpp
+        src/hands/xhand1/xhand1_rs485_hardware.cpp
 )
 
 target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
