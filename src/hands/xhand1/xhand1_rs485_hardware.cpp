@@ -143,8 +143,8 @@ hardware_interface::CallbackReturn XHand1RS485Hardware::on_activate(
   }
 
   command_sent_ = false;
-  pending_command_valid_ = true;
-  pending_command_dirty_ = true;
+  pending_command_valid_ = false;
+  pending_command_dirty_ = false;
   feedback_positions_valid_ = false;
   for (std::size_t i = 0; i < kJointCount; ++i)
   {
@@ -157,6 +157,20 @@ hardware_interface::CallbackReturn XHand1RS485Hardware::on_activate(
     last_command_torque_limits_[i] = torque_limit_;
     feedback_positions_[i] = hw_positions_[i];
     feedback_efforts_[i] = 0.0;
+  }
+
+  if (read_feedback_ && probe_initial_feedback())
+  {
+    initialize_state_from_feedback();
+    RCLCPP_INFO(
+      rclcpp::get_logger(kLoggerName),
+      "Initialized XHAND1 joint state from startup feedback; holding current hand position");
+  }
+  else if (read_feedback_ && require_initial_feedback_)
+  {
+    RCLCPP_WARN(
+      rclcpp::get_logger(kLoggerName),
+      "No valid XHAND1 startup feedback received; position commands will be suppressed until feedback is available");
   }
 
   start_background_thread();
@@ -270,6 +284,16 @@ hardware_interface::return_type XHand1RS485Hardware::write(
 
   {
     std::lock_guard<std::mutex> lock(command_mutex_);
+    if (read_feedback_ && require_initial_feedback_ && !feedback_positions_valid_)
+    {
+      RCLCPP_WARN_THROTTLE(
+        rclcpp::get_logger(kLoggerName),
+        *get_node()->get_clock(),
+        1000,
+        "Suppressing XHAND1 position command until initial feedback is available");
+      return hardware_interface::return_type::OK;
+    }
+
     std::array<double, kJointCount> target_positions{};
     std::array<uint16_t, kJointCount> torque_limits{};
     for (std::size_t i = 0; i < kJointCount; ++i)
@@ -343,6 +367,10 @@ void XHand1RS485Hardware::load_parameters()
     static_cast<int>(std::numeric_limits<uint16_t>::max())));
   read_feedback_ = parse_bool(
     get_parameter("read_feedback", read_feedback_ ? "true" : "false"), read_feedback_);
+  require_initial_feedback_ = parse_bool(
+    get_parameter(
+      "require_initial_feedback", require_initial_feedback_ ? "true" : "false"),
+    require_initial_feedback_);
   tool_torque_scale_ = std::clamp(
     parse_double(get_parameter("left_tool_torque", std::to_string(tool_torque_scale_)),
                  tool_torque_scale_),
@@ -586,6 +614,17 @@ void XHand1RS485Hardware::background_loop()
   {
     const auto loop_start = std::chrono::steady_clock::now();
 
+    if (read_feedback_ && require_initial_feedback_ && !feedback_positions_valid_)
+    {
+      if (probe_initial_feedback())
+      {
+        initialize_state_from_feedback();
+        RCLCPP_INFO(
+          rclcpp::get_logger(kLoggerName),
+          "Initialized XHAND1 joint state from delayed startup feedback; holding current hand position");
+      }
+    }
+
     std::array<double, kJointCount> commands{};
     std::array<uint16_t, kJointCount> torque_limits{};
     bool should_send = false;
@@ -670,6 +709,64 @@ bool XHand1RS485Hardware::send_realtime_command(
   const std::array<double, kJointCount>& commands,
   const std::array<uint16_t, kJointCount>& torque_limits)
 {
+  return exchange_realtime_frame(commands, torque_limits, control_mode_);
+}
+
+bool XHand1RS485Hardware::probe_initial_feedback()
+{
+  std::array<uint16_t, kJointCount> zero_torque_limits{};
+  zero_torque_limits.fill(0);
+
+  if (!exchange_realtime_frame(hw_positions_, zero_torque_limits, kDisabledControlMode))
+  {
+    std::string error;
+    {
+      std::lock_guard<std::mutex> error_lock(error_mutex_);
+      error = last_exchange_error_;
+    }
+    RCLCPP_WARN_THROTTLE(
+      rclcpp::get_logger(kLoggerName),
+      *get_node()->get_clock(),
+      1000,
+      "Failed to probe XHAND1 startup feedback with zero-torque frame: %s",
+      error.empty() ? "unknown error" : error.c_str());
+    return false;
+  }
+
+  return true;
+}
+
+void XHand1RS485Hardware::initialize_state_from_feedback()
+{
+  std::array<double, kJointCount> positions{};
+  {
+    std::lock_guard<std::mutex> feedback_lock(feedback_mutex_);
+    if (!feedback_positions_valid_)
+    {
+      return;
+    }
+    positions = feedback_positions_;
+  }
+
+  std::lock_guard<std::mutex> command_lock(command_mutex_);
+  for (std::size_t i = 0; i < kJointCount; ++i)
+  {
+    hw_positions_[i] = positions[i];
+    previous_positions_[i] = positions[i];
+    hw_commands_[i] = positions[i];
+    pending_command_positions_[i] = positions[i];
+    last_command_positions_[i] = positions[i];
+  }
+  command_sent_ = false;
+  pending_command_valid_ = false;
+  pending_command_dirty_ = false;
+}
+
+bool XHand1RS485Hardware::exchange_realtime_frame(
+  const std::array<double, kJointCount>& commands,
+  const std::array<uint16_t, kJointCount>& torque_limits,
+  uint16_t control_mode)
+{
   std::vector<uint8_t> frame;
   frame.reserve(kFrameHeaderLength + kRealtimeCommandDataLength + kCrcLength);
   frame.push_back(kFrameHead0);
@@ -687,7 +784,7 @@ bool XHand1RS485Hardware::send_realtime_command(
     append_i16_le(frame, kd_);
     append_float_le(frame, static_cast<float>(commands[i]));
     append_u16_le(frame, torque_limits[i]);
-    append_u16_le(frame, control_mode_);
+    append_u16_le(frame, control_mode);
     append_u16_le(frame, 0);
     append_u16_le(frame, 0);
     append_u16_le(frame, 0);
@@ -711,12 +808,20 @@ bool XHand1RS485Hardware::send_realtime_command(
   }
 
   std::vector<uint8_t> response;
+  {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    last_exchange_error_.clear();
+  }
   if (!read_frame(response, feedback_timeout_ms_))
   {
     std::lock_guard<std::mutex> lock(error_mutex_);
-    last_exchange_error_ = response.empty()
-                             ? "feedback timeout/no frame"
-                             : "feedback frame CRC/length error, bytes=" + std::to_string(response.size());
+    if (last_exchange_error_.empty())
+    {
+      last_exchange_error_ = response.empty()
+                               ? "feedback timeout/no frame"
+                               : "feedback frame CRC/length error, bytes=" +
+                                   std::to_string(response.size());
+    }
     return false;
   }
 
@@ -863,8 +968,14 @@ bool XHand1RS485Hardware::read_frame(std::vector<uint8_t>& frame, int timeout_ms
       {
         const auto data_length = read_u16_le(frame, 5);
         expected_size = kFrameHeaderLength + data_length + kCrcLength;
-        if (expected_size < kFrameHeaderLength + kCrcLength)
+        if (expected_size < kFrameHeaderLength + kCrcLength ||
+            expected_size > kMaxFeedbackFrameLength)
         {
+          std::lock_guard<std::mutex> lock(error_mutex_);
+          last_exchange_error_ = "feedback frame length out of range, data_length=" +
+                                 std::to_string(data_length) +
+                                 ", expected_size=" + std::to_string(expected_size) +
+                                 ", max=" + std::to_string(kMaxFeedbackFrameLength);
           frame.clear();
           expected_size = 0;
           continue;
@@ -887,6 +998,18 @@ bool XHand1RS485Hardware::read_frame(std::vector<uint8_t>& frame, int timeout_ms
         return true;
       }
     }
+  }
+
+  if (!frame.empty())
+  {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    last_exchange_error_ = expected_size > 0
+                             ? "feedback frame incomplete, bytes=" +
+                                 std::to_string(frame.size()) +
+                                 ", expected=" + std::to_string(expected_size)
+                             : "feedback frame incomplete, bytes=" +
+                                 std::to_string(frame.size()) +
+                                 ", header not complete";
   }
 
   return false;

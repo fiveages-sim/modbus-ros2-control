@@ -57,12 +57,15 @@ private:
     kRealtimeJointStateDataLength + kTactileSensorDataLength;
   static constexpr std::size_t kFrameHeaderLength = 7;
   static constexpr std::size_t kCrcLength = 2;
+  static constexpr std::size_t kMaxFeedbackFrameLength =
+    kFrameHeaderLength + kRealtimeResponseDataLength + kCrcLength;
   static constexpr uint8_t kFrameHead0 = 0x55;
   static constexpr uint8_t kFrameHead1 = 0xAA;
   static constexpr uint8_t kHostId = 0xFE;
   static constexpr uint8_t kRealtimeCommand = 0x02;
+  static constexpr uint16_t kDisabledControlMode = 0;
   static constexpr uint16_t kPositionMode = 3;
-  static constexpr double kMaxVelocityRadPerSec = 10.0;
+  static constexpr double kMaxVelocityRadPerSec = 30.0;
   static constexpr uint16_t kMaxTorqueLimit = 300;
 
   void load_parameters();
@@ -83,6 +86,12 @@ private:
   bool send_realtime_command(
     const std::array<double, kJointCount>& commands,
     const std::array<uint16_t, kJointCount>& torque_limits);
+  bool exchange_realtime_frame(
+    const std::array<double, kJointCount>& commands,
+    const std::array<uint16_t, kJointCount>& torque_limits,
+    uint16_t control_mode);
+  bool probe_initial_feedback();
+  void initialize_state_from_feedback();
   bool send_frame(const std::vector<uint8_t>& frame);
   bool read_frame(std::vector<uint8_t>& frame, int timeout_ms);
   bool parse_realtime_response(
@@ -111,7 +120,8 @@ private:
   uint8_t host_id_ = kHostId;
   uint8_t hand_id_ = 0;
   bool read_feedback_ = true;
-  int feedback_timeout_ms_ = 20;
+  bool require_initial_feedback_ = true;
+  int feedback_timeout_ms_ = 50;
   int background_period_ms_ = 12;
   double command_deadband_rad_ = 0.001;
   int16_t kp_ = 100;
