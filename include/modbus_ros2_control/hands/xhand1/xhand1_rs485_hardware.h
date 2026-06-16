@@ -13,6 +13,7 @@
 #include <hardware_interface/types/hardware_interface_return_values.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/state.hpp>
+#include <rcl_interfaces/msg/set_parameters_result.hpp>
 
 namespace modbus_ros2_control
 {
@@ -61,8 +62,14 @@ private:
   static constexpr uint8_t kHostId = 0xFE;
   static constexpr uint8_t kRealtimeCommand = 0x02;
   static constexpr uint16_t kPositionMode = 3;
+  static constexpr double kMaxVelocityRadPerSec = 10.0;
+  static constexpr uint16_t kMaxTorqueLimit = 300;
 
   void load_parameters();
+  void declare_tool_parameters();
+  rcl_interfaces::msg::SetParametersResult on_tool_parameters(
+    const std::vector<rclcpp::Parameter>& parameters);
+  void apply_tool_parameters(double torque_scale, double velocity_scale);
   bool validate_joint_interfaces() const;
   bool open_serial();
   void close_serial();
@@ -70,14 +77,21 @@ private:
   void start_background_thread();
   void stop_background_thread();
   void background_loop();
-  bool send_realtime_command(const std::array<double, kJointCount>& commands);
+  std::array<double, kJointCount> compute_limited_command_positions(
+    const std::array<double, kJointCount>& target_positions,
+    double period_seconds) const;
+  bool send_realtime_command(
+    const std::array<double, kJointCount>& commands,
+    const std::array<uint16_t, kJointCount>& torque_limits);
   bool send_frame(const std::vector<uint8_t>& frame);
   bool read_frame(std::vector<uint8_t>& frame, int timeout_ms);
   bool parse_realtime_response(
     const std::vector<uint8_t>& frame,
     std::array<double, kJointCount>& positions,
     std::array<double, kJointCount>& efforts) const;
-  bool command_changed(const std::array<double, kJointCount>& commands) const;
+  bool command_changed(
+    const std::array<double, kJointCount>& commands,
+    const std::array<uint16_t, kJointCount>& torque_limits) const;
 
   static void append_u16_le(std::vector<uint8_t>& frame, uint16_t value);
   static void append_i16_le(std::vector<uint8_t>& frame, int16_t value);
@@ -103,8 +117,10 @@ private:
   int16_t kp_ = 100;
   int16_t ki_ = 0;
   int16_t kd_ = 0;
-  uint16_t torque_limit_ = 1000;
+  uint16_t torque_limit_ = kMaxTorqueLimit;
   uint16_t control_mode_ = kPositionMode;
+  double tool_torque_scale_ = 1.0;
+  double tool_velocity_scale_ = 1.0;
   int serial_fd_ = -1;
   bool command_sent_ = false;
   bool pending_command_valid_ = false;
@@ -114,6 +130,8 @@ private:
   std::mutex command_mutex_;
   std::mutex feedback_mutex_;
   std::mutex error_mutex_;
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr
+    parameter_callback_handle_;
   std::string last_exchange_error_;
 
   std::vector<std::string> joint_names_;
@@ -124,8 +142,12 @@ private:
   std::array<double, kJointCount> hw_velocities_{};
   std::array<double, kJointCount> hw_efforts_{};
   std::array<double, kJointCount> hw_commands_{};
+  std::array<double, kJointCount> hw_velocity_scales_{};
+  std::array<double, kJointCount> hw_effort_scales_{};
   std::array<double, kJointCount> last_command_positions_{};
+  std::array<uint16_t, kJointCount> last_command_torque_limits_{};
   std::array<double, kJointCount> pending_command_positions_{};
+  std::array<uint16_t, kJointCount> pending_command_torque_limits_{};
   std::array<double, kJointCount> feedback_positions_{};
   std::array<double, kJointCount> feedback_efforts_{};
   bool feedback_positions_valid_ = false;

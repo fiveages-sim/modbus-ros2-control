@@ -74,6 +74,7 @@ hardware_interface::CallbackReturn XHand1RS485Hardware::on_init(
   }
 
   load_parameters();
+  declare_tool_parameters();
 
   if (info_.joints.size() != kJointCount)
   {
@@ -105,10 +106,14 @@ hardware_interface::CallbackReturn XHand1RS485Hardware::on_init(
       initial_value_for_joint(info_.joints[i]), lower_limits_[i], upper_limits_[i]);
     previous_positions_[i] = hw_positions_[i];
     hw_commands_[i] = hw_positions_[i];
+    hw_velocity_scales_[i] = tool_velocity_scale_;
+    hw_effort_scales_[i] = tool_torque_scale_;
     feedback_positions_[i] = hw_positions_[i];
     feedback_efforts_[i] = 0.0;
     last_command_positions_[i] = hw_positions_[i];
+    last_command_torque_limits_[i] = torque_limit_;
     pending_command_positions_[i] = hw_positions_[i];
+    pending_command_torque_limits_[i] = torque_limit_;
   }
 
   RCLCPP_INFO(
@@ -144,8 +149,12 @@ hardware_interface::CallbackReturn XHand1RS485Hardware::on_activate(
   for (std::size_t i = 0; i < kJointCount; ++i)
   {
     hw_commands_[i] = hw_positions_[i];
+    hw_velocity_scales_[i] = tool_velocity_scale_;
+    hw_effort_scales_[i] = tool_torque_scale_;
     pending_command_positions_[i] = hw_positions_[i];
+    pending_command_torque_limits_[i] = torque_limit_;
     last_command_positions_[i] = hw_positions_[i];
+    last_command_torque_limits_[i] = torque_limit_;
     feedback_positions_[i] = hw_positions_[i];
     feedback_efforts_[i] = 0.0;
   }
@@ -195,13 +204,19 @@ std::vector<hardware_interface::CommandInterface::SharedPtr>
 XHand1RS485Hardware::on_export_command_interfaces()
 {
   std::vector<hardware_interface::CommandInterface::SharedPtr> command_interfaces;
-  command_interfaces.reserve(kJointCount);
+  command_interfaces.reserve(kJointCount * 3);
 
   for (std::size_t i = 0; i < kJointCount; ++i)
   {
     command_interfaces.push_back(
       std::make_shared<hardware_interface::CommandInterface>(
         joint_names_[i], hardware_interface::HW_IF_POSITION, &hw_commands_[i]));
+    command_interfaces.push_back(
+      std::make_shared<hardware_interface::CommandInterface>(
+        joint_names_[i], hardware_interface::HW_IF_VELOCITY, &hw_velocity_scales_[i]));
+    command_interfaces.push_back(
+      std::make_shared<hardware_interface::CommandInterface>(
+        joint_names_[i], hardware_interface::HW_IF_EFFORT, &hw_effort_scales_[i]));
   }
 
   return command_interfaces;
@@ -246,28 +261,35 @@ hardware_interface::return_type XHand1RS485Hardware::read(
 
 hardware_interface::return_type XHand1RS485Hardware::write(
   const rclcpp::Time& /* time */,
-  const rclcpp::Duration& /* period */)
+  const rclcpp::Duration& period)
 {
   if (serial_fd_ < 0)
   {
     return hardware_interface::return_type::ERROR;
   }
 
-  std::array<double, kJointCount> commands{};
-  for (std::size_t i = 0; i < kJointCount; ++i)
-  {
-    hw_commands_[i] = std::clamp(hw_commands_[i], lower_limits_[i], upper_limits_[i]);
-    commands[i] = hw_commands_[i];
-  }
-
   {
     std::lock_guard<std::mutex> lock(command_mutex_);
-    if (command_sent_ && !command_changed(commands))
+    std::array<double, kJointCount> target_positions{};
+    std::array<uint16_t, kJointCount> torque_limits{};
+    for (std::size_t i = 0; i < kJointCount; ++i)
+    {
+      hw_commands_[i] = std::clamp(hw_commands_[i], lower_limits_[i], upper_limits_[i]);
+      hw_velocity_scales_[i] = std::clamp(tool_velocity_scale_, 0.0, 1.0);
+      hw_effort_scales_[i] = std::clamp(tool_torque_scale_, 0.0, 1.0);
+      target_positions[i] = hw_commands_[i];
+      torque_limits[i] = static_cast<uint16_t>(
+        std::lround(static_cast<double>(torque_limit_) * hw_effort_scales_[i]));
+    }
+
+    const auto commands = compute_limited_command_positions(target_positions, period.seconds());
+    if (command_sent_ && !command_changed(commands, torque_limits))
     {
       return hardware_interface::return_type::OK;
     }
 
     pending_command_positions_ = commands;
+    pending_command_torque_limits_ = torque_limits;
     pending_command_valid_ = true;
     pending_command_dirty_ = true;
   }
@@ -314,25 +336,138 @@ void XHand1RS485Hardware::load_parameters()
   torque_limit_ = static_cast<uint16_t>(std::clamp(
     parse_int(get_parameter("torque_limit", std::to_string(torque_limit_)), torque_limit_),
     0,
-    static_cast<int>(std::numeric_limits<uint16_t>::max())));
+    static_cast<int>(kMaxTorqueLimit)));
   control_mode_ = static_cast<uint16_t>(std::clamp(
     parse_int(get_parameter("control_mode", std::to_string(control_mode_)), control_mode_),
     0,
     static_cast<int>(std::numeric_limits<uint16_t>::max())));
   read_feedback_ = parse_bool(
     get_parameter("read_feedback", read_feedback_ ? "true" : "false"), read_feedback_);
+  tool_torque_scale_ = std::clamp(
+    parse_double(get_parameter("left_tool_torque", std::to_string(tool_torque_scale_)),
+                 tool_torque_scale_),
+    0.0,
+    1.0);
+  tool_velocity_scale_ = std::clamp(
+    parse_double(get_parameter("left_tool_velocity", std::to_string(tool_velocity_scale_)),
+                 tool_velocity_scale_),
+    0.0,
+    1.0);
+}
+
+void XHand1RS485Hardware::declare_tool_parameters()
+{
+  const auto node = get_node();
+  if (!node)
+  {
+    return;
+  }
+
+  if (!node->has_parameter("left_tool_torque"))
+  {
+    node->declare_parameter<double>("left_tool_torque", tool_torque_scale_);
+  }
+  if (!node->has_parameter("left_tool_velocity"))
+  {
+    node->declare_parameter<double>("left_tool_velocity", tool_velocity_scale_);
+  }
+
+  parameter_callback_handle_ = node->add_on_set_parameters_callback(
+    [this](const std::vector<rclcpp::Parameter>& parameters) {
+      return on_tool_parameters(parameters);
+    });
+}
+
+rcl_interfaces::msg::SetParametersResult XHand1RS485Hardware::on_tool_parameters(
+  const std::vector<rclcpp::Parameter>& parameters)
+{
+  rcl_interfaces::msg::SetParametersResult result;
+  result.successful = true;
+
+  double next_torque_scale = tool_torque_scale_;
+  double next_velocity_scale = tool_velocity_scale_;
+  bool changed = false;
+
+  for (const auto& parameter : parameters)
+  {
+    const auto& name = parameter.get_name();
+    if (name != "left_tool_torque" && name != "left_tool_velocity")
+    {
+      continue;
+    }
+    if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE &&
+        parameter.get_type() != rclcpp::ParameterType::PARAMETER_INTEGER)
+    {
+      result.successful = false;
+      result.reason = name + " must be numeric";
+      return result;
+    }
+
+    const double value =
+      parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER
+        ? static_cast<double>(parameter.as_int())
+        : parameter.as_double();
+    if (value < 0.0 || value > 1.0)
+    {
+      result.successful = false;
+      result.reason = name + " must be in [0.0, 1.0]";
+      return result;
+    }
+
+    if (name == "left_tool_torque")
+    {
+      next_torque_scale = value;
+    }
+    else
+    {
+      next_velocity_scale = value;
+    }
+    changed = true;
+  }
+
+  if (changed)
+  {
+    apply_tool_parameters(next_torque_scale, next_velocity_scale);
+    RCLCPP_INFO(
+      rclcpp::get_logger(kLoggerName),
+      "Updated XHAND1 tool parameters: left_tool_torque=%.3f, left_tool_velocity=%.3f",
+      tool_torque_scale_,
+      tool_velocity_scale_);
+  }
+
+  return result;
+}
+
+void XHand1RS485Hardware::apply_tool_parameters(
+  double torque_scale,
+  double velocity_scale)
+{
+  std::lock_guard<std::mutex> lock(command_mutex_);
+  tool_torque_scale_ = std::clamp(torque_scale, 0.0, 1.0);
+  tool_velocity_scale_ = std::clamp(velocity_scale, 0.0, 1.0);
+  hw_effort_scales_.fill(tool_torque_scale_);
+  hw_velocity_scales_.fill(tool_velocity_scale_);
+  pending_command_dirty_ = true;
 }
 
 bool XHand1RS485Hardware::validate_joint_interfaces() const
 {
   for (const auto& joint : info_.joints)
   {
-    if (joint.command_interfaces.size() != 1 ||
-        joint.command_interfaces[0].name != hardware_interface::HW_IF_POSITION)
+    const auto has_command_interface = [&joint](const std::string& interface_name) {
+      return std::any_of(
+        joint.command_interfaces.begin(),
+        joint.command_interfaces.end(),
+        [&interface_name](const auto& interface) { return interface.name == interface_name; });
+    };
+
+    if (!has_command_interface(hardware_interface::HW_IF_POSITION) ||
+        !has_command_interface(hardware_interface::HW_IF_VELOCITY) ||
+        !has_command_interface(hardware_interface::HW_IF_EFFORT))
     {
       RCLCPP_ERROR(
         rclcpp::get_logger(kLoggerName),
-        "Joint '%s' must expose exactly one position command interface",
+        "Joint '%s' must expose position, velocity, and effort command interfaces",
         joint.name.c_str());
       return false;
     }
@@ -452,12 +587,14 @@ void XHand1RS485Hardware::background_loop()
     const auto loop_start = std::chrono::steady_clock::now();
 
     std::array<double, kJointCount> commands{};
+    std::array<uint16_t, kJointCount> torque_limits{};
     bool should_send = false;
     {
       std::lock_guard<std::mutex> lock(command_mutex_);
       if (pending_command_valid_)
       {
         commands = pending_command_positions_;
+        torque_limits = pending_command_torque_limits_;
         should_send = true;
         pending_command_dirty_ = false;
       }
@@ -465,10 +602,11 @@ void XHand1RS485Hardware::background_loop()
 
     if (should_send)
     {
-      if (send_realtime_command(commands))
+      if (send_realtime_command(commands, torque_limits))
       {
         std::lock_guard<std::mutex> lock(command_mutex_);
         last_command_positions_ = commands;
+        last_command_torque_limits_ = torque_limits;
         command_sent_ = true;
       }
       else
@@ -499,8 +637,38 @@ void XHand1RS485Hardware::background_loop()
   }
 }
 
+std::array<double, XHand1RS485Hardware::kJointCount>
+XHand1RS485Hardware::compute_limited_command_positions(
+  const std::array<double, kJointCount>& target_positions,
+  double period_seconds) const
+{
+  std::array<double, kJointCount> limited_positions{};
+  for (std::size_t i = 0; i < kJointCount; ++i)
+  {
+    const double target = std::clamp(target_positions[i], lower_limits_[i], upper_limits_[i]);
+    const double current = command_sent_ ? last_command_positions_[i] : hw_positions_[i];
+    const double velocity_scale = std::clamp(hw_velocity_scales_[i], 0.0, 1.0);
+    const double max_step = kMaxVelocityRadPerSec * velocity_scale * std::max(0.0, period_seconds);
+    const double delta = target - current;
+
+    if (max_step <= std::numeric_limits<double>::epsilon() || std::abs(delta) <= max_step)
+    {
+      limited_positions[i] = max_step <= std::numeric_limits<double>::epsilon() ? current : target;
+    }
+    else
+    {
+      limited_positions[i] = current + std::copysign(max_step, delta);
+    }
+
+    limited_positions[i] = std::clamp(limited_positions[i], lower_limits_[i], upper_limits_[i]);
+  }
+
+  return limited_positions;
+}
+
 bool XHand1RS485Hardware::send_realtime_command(
-  const std::array<double, kJointCount>& commands)
+  const std::array<double, kJointCount>& commands,
+  const std::array<uint16_t, kJointCount>& torque_limits)
 {
   std::vector<uint8_t> frame;
   frame.reserve(kFrameHeaderLength + kRealtimeCommandDataLength + kCrcLength);
@@ -518,7 +686,7 @@ bool XHand1RS485Hardware::send_realtime_command(
     append_i16_le(frame, ki_);
     append_i16_le(frame, kd_);
     append_float_le(frame, static_cast<float>(commands[i]));
-    append_u16_le(frame, torque_limit_);
+    append_u16_le(frame, torque_limits[i]);
     append_u16_le(frame, control_mode_);
     append_u16_le(frame, 0);
     append_u16_le(frame, 0);
@@ -781,11 +949,16 @@ bool XHand1RS485Hardware::parse_realtime_response(
 }
 
 bool XHand1RS485Hardware::command_changed(
-  const std::array<double, kJointCount>& commands) const
+  const std::array<double, kJointCount>& commands,
+  const std::array<uint16_t, kJointCount>& torque_limits) const
 {
   for (std::size_t i = 0; i < kJointCount; ++i)
   {
     if (std::abs(commands[i] - last_command_positions_[i]) > command_deadband_rad_)
+    {
+      return true;
+    }
+    if (torque_limits[i] != last_command_torque_limits_[i])
     {
       return true;
     }
