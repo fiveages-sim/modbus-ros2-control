@@ -372,12 +372,12 @@ void XHand1RS485Hardware::load_parameters()
       "require_initial_feedback", require_initial_feedback_ ? "true" : "false"),
     require_initial_feedback_);
   tool_torque_scale_ = std::clamp(
-    parse_double(get_parameter("left_tool_torque", std::to_string(tool_torque_scale_)),
+    parse_double(get_parameter("tool_torque", std::to_string(tool_torque_scale_)),
                  tool_torque_scale_),
     0.0,
     1.0);
   tool_velocity_scale_ = std::clamp(
-    parse_double(get_parameter("left_tool_velocity", std::to_string(tool_velocity_scale_)),
+    parse_double(get_parameter("tool_velocity", std::to_string(tool_velocity_scale_)),
                  tool_velocity_scale_),
     0.0,
     1.0);
@@ -391,13 +391,13 @@ void XHand1RS485Hardware::declare_tool_parameters()
     return;
   }
 
-  if (!node->has_parameter("left_tool_torque"))
+  if (!node->has_parameter("tool_torque"))
   {
-    node->declare_parameter<double>("left_tool_torque", tool_torque_scale_);
+    node->declare_parameter<double>("tool_torque", tool_torque_scale_);
   }
-  if (!node->has_parameter("left_tool_velocity"))
+  if (!node->has_parameter("tool_velocity"))
   {
-    node->declare_parameter<double>("left_tool_velocity", tool_velocity_scale_);
+    node->declare_parameter<double>("tool_velocity", tool_velocity_scale_);
   }
 
   parameter_callback_handle_ = node->add_on_set_parameters_callback(
@@ -419,7 +419,7 @@ rcl_interfaces::msg::SetParametersResult XHand1RS485Hardware::on_tool_parameters
   for (const auto& parameter : parameters)
   {
     const auto& name = parameter.get_name();
-    if (name != "left_tool_torque" && name != "left_tool_velocity")
+    if (name != "tool_torque" && name != "tool_velocity")
     {
       continue;
     }
@@ -442,7 +442,7 @@ rcl_interfaces::msg::SetParametersResult XHand1RS485Hardware::on_tool_parameters
       return result;
     }
 
-    if (name == "left_tool_torque")
+    if (name == "tool_torque")
     {
       next_torque_scale = value;
     }
@@ -458,7 +458,7 @@ rcl_interfaces::msg::SetParametersResult XHand1RS485Hardware::on_tool_parameters
     apply_tool_parameters(next_torque_scale, next_velocity_scale);
     RCLCPP_INFO(
       rclcpp::get_logger(kLoggerName),
-      "Updated XHAND1 tool parameters: left_tool_torque=%.3f, left_tool_velocity=%.3f",
+      "Updated XHAND1 tool parameters: tool_torque=%.3f, tool_velocity=%.3f",
       tool_torque_scale_,
       tool_velocity_scale_);
   }
