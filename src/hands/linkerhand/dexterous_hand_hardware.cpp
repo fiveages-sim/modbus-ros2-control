@@ -105,6 +105,18 @@ namespace modbus_ros2_control
             );
             return hardware_interface::CallbackReturn::ERROR;
         }
+        if (product_type.find("INSPIRE") != std::string::npos ||
+            product_type.find("RH56") != std::string::npos)
+        {
+            RCLCPP_ERROR(
+                get_node()->get_logger(),
+                "Inspire RH56 hand uses a dedicated hardware plugin: modbus_ros2_control/InspireHandHardware. "
+                "Use inspire_description inspire_rs485_side_system (or hand.xacro with hardware:=real). "
+                "Do not use DexterousHandHardware for hand_type=%s.",
+                hand_type_.c_str()
+            );
+            return hardware_interface::CallbackReturn::ERROR;
+        }
         
         // 根据关节数量和产品类型创建对应的灵巧手对象
         if (hand_joint_names.size() == ModbusConfig::DexterousHand::JOINT_COUNT_O7)
@@ -122,20 +134,7 @@ namespace modbus_ros2_control
         }
         else if (hand_joint_names.size() == ModbusConfig::DexterousHand::JOINT_COUNT_O6)
         {
-            // 6-DOF hand: determine product based on hand_type parameter
-            if (product_type.find("INSPIRE") != std::string::npos || product_type.find("RH56E2") != std::string::npos)
-            {
-                hand_ = std::make_unique<InspireE2DexterousHandWrapper>(
-                    get_node()->get_logger(),
-                    get_node()->get_clock(),
-                    hand_joint_names
-                );
-                RCLCPP_INFO(
-                    get_node()->get_logger(),
-                    "Creating InspireE2 dexterous hand (6-DOF)"
-                );
-            }
-            else if (product_type == "L6" || product_type.find("L6") != std::string::npos)
+            if (product_type == "L6" || product_type.find("L6") != std::string::npos)
             {
                 // L6 hand (6 joints)
                 hand_ = std::make_unique<L6DexterousHandWrapper>(
@@ -177,14 +176,7 @@ namespace modbus_ros2_control
         {
             std::string product_type = hand_type_;
             std::transform(product_type.begin(), product_type.end(), product_type.begin(), ::toupper);
-            if (product_type.find("INSPIRE") != std::string::npos || product_type.find("RH56E2") != std::string::npos)
-            {
-                product_name = "InspireE2";
-            }
-            else
-            {
-                product_name = (product_type == "L6" || product_type.find("L6") != std::string::npos) ? "L6" : "O6";
-            }
+            product_name = (product_type == "L6" || product_type.find("L6") != std::string::npos) ? "L6" : "O6";
         }
         
         RCLCPP_INFO(

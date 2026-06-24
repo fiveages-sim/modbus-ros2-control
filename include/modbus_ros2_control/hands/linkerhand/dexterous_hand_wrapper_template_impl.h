@@ -167,48 +167,6 @@ namespace modbus_ros2_control
                 return true;
             }
         }
-        else if (product_type == DexterousHandProduct::InspireE2)
-        {
-            if (name_lower.find("thumb") != std::string::npos)
-            {
-                if (name_lower.find("joint1") != std::string::npos)
-                {
-                    lower = ModbusConfig::DexterousHand::O6::THUMB_JOINT1_LOWER;
-                    upper = ModbusConfig::DexterousHand::O6::THUMB_JOINT1_UPPER;
-                    return true;
-                }
-                else if (name_lower.find("joint2") != std::string::npos)
-                {
-                    lower = ModbusConfig::DexterousHand::O6::THUMB_JOINT2_LOWER;
-                    upper = ModbusConfig::DexterousHand::O6::THUMB_JOINT2_UPPER;
-                    return true;
-                }
-            }
-            else if (name_lower.find("index") != std::string::npos)
-            {
-                lower = ModbusConfig::DexterousHand::O6::INDEX_JOINT_LOWER;
-                upper = ModbusConfig::DexterousHand::O6::INDEX_JOINT_UPPER;
-                return true;
-            }
-            else if (name_lower.find("middle") != std::string::npos)
-            {
-                lower = ModbusConfig::DexterousHand::O6::MIDDLE_JOINT_LOWER;
-                upper = ModbusConfig::DexterousHand::O6::MIDDLE_JOINT_UPPER;
-                return true;
-            }
-            else if (name_lower.find("ring") != std::string::npos)
-            {
-                lower = ModbusConfig::DexterousHand::O6::RING_JOINT_LOWER;
-                upper = ModbusConfig::DexterousHand::O6::RING_JOINT_UPPER;
-                return true;
-            }
-            else if (name_lower.find("pinky") != std::string::npos || name_lower.find("little") != std::string::npos)
-            {
-                lower = ModbusConfig::DexterousHand::O6::PINKY_JOINT_LOWER;
-                upper = ModbusConfig::DexterousHand::O6::PINKY_JOINT_UPPER;
-                return true;
-            }
-        }
         
         return false;
     }
@@ -331,11 +289,6 @@ namespace modbus_ros2_control
     {
         // For now, L6 uses the same mapping as O6
         // Customize this if L6 has a different register layout
-        return DexterousHandProductTraits<DexterousHandProduct::O6>::getModbusRegisterIndex(joint_name);
-    }
-
-    inline int DexterousHandProductTraits<DexterousHandProduct::InspireE2>::getModbusRegisterIndex(const std::string& joint_name)
-    {
         return DexterousHandProductTraits<DexterousHandProduct::O6>::getModbusRegisterIndex(joint_name);
     }
 

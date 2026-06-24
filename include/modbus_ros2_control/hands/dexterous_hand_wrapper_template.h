@@ -21,7 +21,6 @@ namespace modbus_ros2_control
         O7,  // 7-DOF hand
         O6,  // 6-DOF hand
         L6,  // 6-DOF hand (different model)
-        InspireE2
     };
 
     /**
@@ -125,16 +124,6 @@ namespace modbus_ros2_control
         static int getModbusRegisterIndex(const std::string& joint_name);
     };
 
-    template<>
-    struct DexterousHandProductTraits<DexterousHandProduct::InspireE2>
-    {
-        static constexpr size_t JOINT_COUNT = 6;
-        static constexpr uint16_t JOINT_POSITION_REG_START = 0;
-        static constexpr const char* PRODUCT_NAME = "InspireE2";
-
-        static int getModbusRegisterIndex(const std::string& joint_name);
-    };
-
     /**
      * @brief Template-based dexterous hand wrapper
      * 
@@ -216,7 +205,6 @@ namespace modbus_ros2_control
     using SimpleDexterousHandWrapper = DexterousHandWrapperTemplate<DexterousHandProduct::O7>;  // O7 hand (7-DOF)
     using O6DexterousHandWrapper = DexterousHandWrapperTemplate<DexterousHandProduct::O6>;      // O6 hand (6-DOF)
     using L6DexterousHandWrapper = DexterousHandWrapperTemplate<DexterousHandProduct::L6>;      // L6 hand (6-DOF)
-    using InspireE2DexterousHandWrapper = DexterousHandWrapperTemplate<DexterousHandProduct::InspireE2>;
 } // namespace modbus_ros2_control
 
 // Include template implementation
