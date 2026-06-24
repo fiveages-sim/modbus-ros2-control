@@ -1,430 +1,195 @@
 # Modbus ROS2 Control
 
-通用的 Modbus 末端执行器 ROS2 Control 硬件接口，支持多种使用 Modbus RTU 协议的末端执行器（夹爪等）。
+通用的 Modbus / RS485 末端执行器 ROS2 Control 硬件接口，支持夹爪与多种灵巧手。
 
-## 架构设计
+## 1. 支持的末端执行器
 
-本包采用**抽象基类 + 具体实现**的设计模式，便于扩展支持不同的 Modbus 末端执行器协议：
+本包注册 **5 个** `hardware_interface::SystemInterface` 插件（见 `modbus_ros2_control.xml`）：
 
-```
-ModbusGripperBase (抽象基类)
-    ├── ChangingtekGripper (Changingtek 夹爪实现)
-    └── [未来可扩展] OtherGripper (其他夹爪实现)
-```
+| 插件 | 产品 | 识别 / 配置方式 |
+|------|------|-----------------|
+| **`ModbusHardware`** | Changingtek AG2F90 | `gripper_type:=changingtek`，`variant:=90c` / `90d` |
+| **`DexterousHandHardware`** | LinkerHand **O7** | URDF 7 关节 |
+| | LinkerHand **O6** | URDF 6 关节（默认） |
+| | LinkerHand **L6** | `hand_type` 含 `L6` |
+| | Freedom / Inspire | **不支持** — 初始化失败，请用对应专用插件 |
+| **`InspireHandHardware`** | Inspire **RH56 系列**（E2 / F2） | URDF 6 关节；Modbus RTU（FC03/FC10）；限位写死为 RH56E2 |
+| **`FreedomRS485Hardware`** | Freedom **V1** / **V2** | `protocol_version:=auto` / `freedomv1` / `freedomv2`（或按关节数推断） |
+| **`XHand1RS485Hardware`** | **XHand1** | URDF 12 关节；专用 RS485（默认 3 Mbps） |
 
-## Build
+**Inspire 请使用 `InspireHandHardware`**
 
-* Install libmodbus-dev
-    ```bash
-    sudo apt-get install libmodbus-dev 
-    ```
-* Build the package
-    ```bash
-    cd ~/ros2_ws
-    colcon build --packages-up-to modbus_ros2_control --symlink-install
-    ```
+- `hand_type` 含 `INSPIRE` 或 `RH56` 时，`DexterousHandHardware` 会拒绝初始化。
+- USB 路径请用 `inspire_description` 的 `inspire_rs485_side_system` 宏（见 [§3.3](#33-inspire-rh56inspirehandhardware)）。
 
-### 代码结构
+推荐在机器人 description 包中通过 xacro 宏接线，而非手写完整关节块（见 [§3 配置参考](#3-配置参考)）。
 
-代码按功能模块组织在子文件夹中：
+## 2. 代码结构
 
 ```
 modbus_ros2_control/
-├── communicator/          # Modbus 通信层
-│   └── ModbusRtuCommunicator
-├── grippers/              # 夹爪相关（基类和实现）
-│   ├── ModbusGripperBase (抽象基类)
-│   └── ChangingtekGripper (具体实现)
-└── ModbusHardware         # ROS2 Control 硬件接口（入口点）
+├── communicator/
+│   └── ModbusRtuCommunicator          # libmodbus 封装
+├── grippers/
+│   ├── ModbusGripperBase
+│   └── ChangingtekGripper             # ModbusHardware
+├── hands/
+│   ├── linkerhand/                    # DexterousHandHardware
+│   ├── inspire/                       # InspireHandHardware
+│   ├── freedom/                       # FreedomRS485Hardware
+│   └── xhand1/                        # XHand1RS485Hardware
+├── modbus_hardware.cpp                # 夹爪插件入口
+└── modbus_ros2_control.xml            # 插件清单
 ```
 
-### 核心组件
+夹爪路径复用 `gripper_hardware_common`（Changingtek、LinkerHand `DexterousHandHardware`）。`InspireHandHardware` 协议逻辑在包内自包含，与 `marvin_ros2_control` 并行实现（见 [§9 TODO](#9-todo)）。
 
-1. **communicator/ModbusRtuCommunicator** - Modbus RTU 通信封装类
-    - 封装 libmodbus 的底层通信
-    - 提供统一的读写接口
+## 3. 配置参考
 
-2. **grippers/ModbusGripperBase** - 夹爪抽象基类
-    - 定义统一的接口（初始化、读取、写入）
-    - 提供 ROS2 Control 接口导出功能
-    - 位置归一化（0.0=闭合，1.0=打开）
+关节接口定义放在各 `*_description` 包；此处仅示硬件插件与关键参数。完整关节列表请 include 对应 xacro。
 
-3. **grippers/ChangingtekGripper** - Changingtek 夹爪具体实现
-    - 实现 Changingtek 特定的 Modbus 协议
-    - 位置范围：0-9000（0=打开，9000=闭合）
-
-4. **hardware/ModbusHardware** - ROS2 Control 硬件接口
-    - 管理 Modbus 连接
-    - 创建和初始化夹爪对象
-    - 实现 ROS2 Control 生命周期
-
-## 使用方法
-
-### 1. Changingtek 夹爪配置
-
-#### 在 URDF 中配置
+### 3.1 Changingtek 夹爪（`ModbusHardware`）
 
 ```xml
 <ros2_control name="ModbusGripperSystem" type="system">
   <hardware>
     <plugin>modbus_ros2_control/ModbusHardware</plugin>
-    <!-- 只需指定 gripper_type，其他参数会自动配置 -->
     <param name="gripper_type">changingtek</param>
-    
-    <!-- 可选：指定变体 (90c 或 90d) -->
     <param name="variant">90c</param>
-    
-    <!-- 如果需要覆盖默认值，可以显式指定 -->
-    <!-- <param name="serial_port">/dev/ttyUSB1</param> -->
-    <!-- <param name="slave_id">2</param> -->
+    <!-- 可选: serial_port, slave_id, baudrate -->
   </hardware>
-  
   <joint name="gripper_joint">
     <command_interface name="position"/>
-    <state_interface name="position">
-      <param name="initial_value">0.0</param>
-    </state_interface>
+    <state_interface name="position"/>
     <state_interface name="velocity"/>
     <state_interface name="effort"/>
   </joint>
 </ros2_control>
 ```
 
-### 2. O7 灵巧手配置
-
-#### 在 URDF 中配置
+### 3.2 LinkerHand（`DexterousHandHardware`）
 
 ```xml
-<ros2_control name="DexterousHandSystem" type="system">
+<ros2_control name="linkerhand_right_system" type="system">
   <hardware>
     <plugin>modbus_ros2_control/DexterousHandHardware</plugin>
-    <!-- 串口路径 -->
     <param name="serial_port">/dev/ttyUSB0</param>
-    <!-- 手部：left 或 right (默认: right) -->
     <param name="hand_side">right</param>
+    <param name="hand_type">linkerhand_o7</param>
   </hardware>
-  
-  <!-- 7个关节：拇指弯曲、拇指横摆、食指、中指、无名指、小指、拇指横滚 -->
-  <joint name="thumb_pitch">
-    <command_interface name="position"/>
-    <state_interface name="position"/>
-    <state_interface name="velocity"/>
-    <state_interface name="effort"/>
-  </joint>
-  
-  <joint name="thumb_yaw">
-    <command_interface name="position"/>
-    <state_interface name="position"/>
-    <state_interface name="velocity"/>
-    <state_interface name="effort"/>
-  </joint>
-  
-  <joint name="index_pitch">
-    <command_interface name="position"/>
-    <state_interface name="position"/>
-    <state_interface name="velocity"/>
-    <state_interface name="effort"/>
-  </joint>
-  
-  <joint name="middle_pitch">
-    <command_interface name="position"/>
-    <state_interface name="position"/>
-    <state_interface name="velocity"/>
-    <state_interface name="effort"/>
-  </joint>
-  
-  <joint name="ring_pitch">
-    <command_interface name="position"/>
-    <state_interface name="position"/>
-    <state_interface name="velocity"/>
-    <state_interface name="effort"/>
-  </joint>
-  
-  <joint name="little_pitch">
-    <command_interface name="position"/>
-    <state_interface name="position"/>
-    <state_interface name="velocity"/>
-    <state_interface name="effort"/>
-  </joint>
-  
-  <joint name="thumb_roll">
-    <command_interface name="position"/>
-    <state_interface name="position"/>
-    <state_interface name="velocity"/>
-    <state_interface name="effort"/>
-  </joint>
+  <!-- include linkerhand_description xacro 宏，如 linkerhand_o7_interfaces -->
 </ros2_control>
 ```
 
-#### 使用 Xacro 宏（推荐）
+参考：`linkerhand_description/xacro/ros2_control/hand.xacro`（单臂 launch）、各机器人 `robot.xacro` 中的 `side_usb_hand_system`。
 
-可以创建一个 xacro 文件来简化配置：
-
-```xml
-<?xml version="1.0"?>
-<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
-  
-  <xacro:macro name="o7_dexterous_hand_interfaces" params="name serial_port:=/dev/ttyUSB0 hand_side:=right">
-    <ros2_control name="${name}_dexterous_hand" type="system">
-      <hardware>
-        <plugin>modbus_ros2_control/DexterousHandHardware</plugin>
-        <param name="serial_port">${serial_port}</param>
-        <param name="hand_side">${hand_side}</param>
-      </hardware>
-      
-      <joint name="${name}_thumb_pitch">
-        <command_interface name="position"/>
-        <state_interface name="position"/>
-        <state_interface name="velocity"/>
-        <state_interface name="effort"/>
-      </joint>
-      
-      <joint name="${name}_thumb_yaw">
-        <command_interface name="position"/>
-        <state_interface name="position"/>
-        <state_interface name="velocity"/>
-        <state_interface name="effort"/>
-      </joint>
-      
-      <joint name="${name}_index_pitch">
-        <command_interface name="position"/>
-        <state_interface name="position"/>
-        <state_interface name="velocity"/>
-        <state_interface name="effort"/>
-      </joint>
-      
-      <joint name="${name}_middle_pitch">
-        <command_interface name="position"/>
-        <state_interface name="position"/>
-        <state_interface name="velocity"/>
-        <state_interface name="effort"/>
-      </joint>
-      
-      <joint name="${name}_ring_pitch">
-        <command_interface name="position"/>
-        <state_interface name="position"/>
-        <state_interface name="velocity"/>
-        <state_interface name="effort"/>
-      </joint>
-      
-      <joint name="${name}_little_pitch">
-        <command_interface name="position"/>
-        <state_interface name="position"/>
-        <state_interface name="velocity"/>
-        <state_interface name="effort"/>
-      </joint>
-      
-      <joint name="${name}_thumb_roll">
-        <command_interface name="position"/>
-        <state_interface name="position"/>
-        <state_interface name="velocity"/>
-        <state_interface name="effort"/>
-      </joint>
-    </ros2_control>
-  </xacro:macro>
-  
-</robot>
-```
-
-然后在主 URDF 中使用：
+### 3.3 Inspire RH56（`InspireHandHardware`）
 
 ```xml
-<xacro:include filename="$(find your_package)/xacro/o7_hand_interfaces.xacro"/>
-<xacro:o7_dexterous_hand_interfaces name="left" serial_port="/dev/ttyUSB0" hand_side="left"/>
-<xacro:o7_dexterous_hand_interfaces name="right" serial_port="/dev/ttyUSB1" hand_side="right"/>
+<!-- 推荐直接使用 inspire_description 宏 -->
+<xacro:inspire_rs485_side_system side="left" serial_port="/dev/ttyUSB0" hand_type="inspire_f2"/>
 ```
 
-### 3. 配置参数说明
+宏定义：`inspire_description/xacro/ros2_control/side_systems.xacro`  
+单臂示例：`inspire_description/xacro/ros2_control/hand.xacro`
 
-#### Changingtek 夹爪参数
+### 3.4 Freedom / XHand1
 
-**必需参数**：
-- `gripper_type`: 夹爪类型（"changingtek"）
-
-**可选参数**：
-- `variant`: 变体类型（"90c" 或 "90d"，默认 "90c"）
-- `serial_port`: 串口路径（默认 `/dev/ttyUSB0`）
-- `baudrate`: 波特率（默认 `115200`）
-- `slave_id`: Modbus 从站地址（默认 `1`）
-- `parity`: 校验位（默认 `N`，无校验）
-- `data_bits`: 数据位（默认 `8`）
-- `stop_bits`: 停止位（默认 `1`）
-
-#### O7 灵巧手参数
-
-**必需参数**：
-- `serial_port`: 串口路径（如 `/dev/ttyUSB0`）
-
-**可选参数**：
-- `hand_side`: 手部类型（"left" 或 "right"，默认 "right"）
-  - "left" → Modbus ID: 0x28 (40)
-  - "right" → Modbus ID: 0x27 (39)
-
-**固定参数**（不可修改）：
-- `baudrate`: `115200`
-- `parity`: `N`（无校验）
-- `data_bits`: `8`
-- `stop_bits`: `1`
-
-### 4. 位置单位
-
-#### Changingtek 夹爪
-- **ROS2 Control 接口**：归一化值 0.0-1.0
-    - 0.0 = 完全闭合
-    - 1.0 = 完全打开
-- **Changingtek 协议**：0-9000（单位：mm）
-    - 0 = 完全打开
-    - 9000 = 完全闭合
-- 转换由 `ChangingtekGripper` 自动处理
-
-#### O7 灵巧手
-- **ROS2 Control 接口**：归一化值 0.0-1.0
-    - 0.0 = 最小位置（弯曲/靠拢）
-    - 1.0 = 最大位置（伸直/远离）
-- **Modbus 协议**：0-255
-    - 0 = 最小位置
-    - 255 = 最大位置
-    - 128 = 中间位置
-- 转换由 `SimpleDexterousHandWrapper` 自动处理
-
-### 5. 启动方法
-
-#### 使用 basic_joint_controller（推荐）
-
-最简单的方法是使用 `basic_joint_controller` 包提供的 launch 文件：
-
-```bash
-# 启动左手（direction=1）
-ros2 launch basic_joint_controller hand.launch.py \
-    hand:=linkerhand \
-    type:=o7 \
-    hardware:=real \
-    direction:=1 
-
-# 启动右手（direction=-1）
-ros2 launch basic_joint_controller hand.launch.py \
-    hand:=linkerhand \
-    type:=o7 \
-    hardware:=real \
-    direction:=-1 
+```xml
+<xacro:freedom_rs485_side_system side="left" serial_port="/dev/ttyUSB0" type="freedomv2"/>
+<xacro:xhand1_rs485_side_system side="left" serial_port="/dev/ttyUSB1"/>
 ```
 
-该 launch 文件会自动处理所有必要的步骤，包括启动 ros2_control_node、加载控制器等。
+宏定义：`freedom_description`、`xhand1_description` 的 `xacro/ros2_control/side_systems.xacro`。
 
-#### 自定义 Launch 文件
+## 4. 硬件参数
 
-如果需要自定义 launch 文件，可以参考 `basic_joint_controller/launch/hand.launch.py` 的实现。
+| 插件 | 参数 | 默认 | 说明 |
+|------|------|------|------|
+| **ModbusHardware** | `gripper_type` | `changingtek` | 必需 |
+| | `variant` | `90c` | `90c` / `90d` |
+| | `serial_port` | `/dev/ttyUSB0` | |
+| | `slave_id` | `1` | |
+| | `baudrate` | `115200` | |
+| **DexterousHandHardware** | `serial_port` | — | 必需 |
+| | `hand_side` | `right` | `left` / `right`；左 `0x28`，右 `0x27` |
+| | `hand_type` | `simple_dexterous_hand` | 区分 O6 / L6；含 `INSPIRE` / `RH56` 会拒绝 |
+| | `max_speed_ratio` | — | 可选，如 `1.0` |
+| | 串口格式 | 固定 | 115200 8N1 |
+| **InspireHandHardware** | `serial_port` | `/dev/ttyUSB0` | |
+| | `hand_side` | `left` | `slave_id:=auto` 时左 `2`、右 `1` |
+| | `slave_id` | `auto` | |
+| | `baudrate` | `115200` | |
+| | `read_feedback` | `true` | |
+| **FreedomRS485Hardware** | `protocol_version` | `auto` | `freedomv1` / `freedomv2` |
+| | `serial_port` | `/dev/ttyUSB0` | |
+| | `hand_side` | — | |
+| | `command_speed` | `100` | |
+| **XHand1RS485Hardware** | `serial_port` | `/dev/ttyUSB0` | |
+| | `baudrate` | `3000000` | |
+| | `hand_id` / `host_id` | `0` / `0xFE` | |
 
-关键步骤：
-1. 使用 `linkerhand_description` 包的 xacro 文件
-2. 设置 `ros2_control_hardware_type=real` 以使用 Modbus 硬件
-3. 传递 `serial_port` 和 `direction` 参数给 xacro
-4. 启动 `ros2_control_node` 和控制器
+## 5. 位置单位
 
-### 6. 快速启动示例
+| 末端 | ROS2 Control 接口 | 设备协议 |
+|------|-------------------|----------|
+| Changingtek 夹爪 | 0.0（闭合）~ 1.0（打开） | 0–9000（0=开，9000=合） |
+| LinkerHand O6/O7 | 0.0 ~ 1.0（弯曲→伸直） | 0–255 |
+| Inspire RH56 | 弧度（rad） | 寄存器原始值约 500–1750 |
+| Freedom / XHand1 | 弧度（rad） | 各协议自定义映射 |
 
-#### 使用 basic_joint_controller Launch 文件（推荐）
+## 6. 编译与依赖
 
-```bash
-# 1. 编译
-cd ~/ros2_ws
-colcon build --packages-up-to modbus_ros2_control linkerhand_description basic_joint_controller --symlink-install
-source install/setup.bash
-
-# 2. 设置串口权限（选择以下方法之一）
-
-## 方法1：临时设置（每次重启后需要重新设置）
-sudo chmod 666 /dev/ttyUSB0  # 根据实际串口调整
-
-## 方法2：永久设置 - 将用户添加到 dialout 组（推荐）
-sudo usermod -a -G dialout $USER
-# 然后注销并重新登录，或运行：newgrp dialout
-
-## 方法3：永久设置 - 使用 udev 规则（最灵活）
-# 安装 udev 规则文件
-sudo cp $(find . -name "99-ttyusb-permissions.rules") /etc/udev/rules.d/
-sudo udevadm control --reload-rules
-sudo udevadm trigger
-# 重新插拔 USB 设备使其生效
-
-# 3. 启动灵巧手（左手，direction=1）
-ros2 launch basic_joint_controller hand.launch.py \
-    hand:=linkerhand \
-    type:=o7 \
-    hardware:=real \
-    direction:=1 
-
-# 或启动右手（direction=-1）
-ros2 launch basic_joint_controller hand.launch.py \
-    hand:=linkerhand \
-    type:=o7 \
-    hardware:=real \
-    direction:=-1 
-```
-
-该 launch 文件会自动：
-- 启动 `robot_state_publisher`
-- 启动 `ros2_control_node`
-- 加载 `joint_state_broadcaster` 控制器
-- 加载 `hand_joint_controller` 控制器
-
-#### 控制灵巧手
-
-```bash
-# 发送位置命令（归一化值 0.0-1.0）
-# 格式：[thumb_joint1, thumb_joint2, thumb_joint3, index_joint, middle_joint, ring_joint, pinky_joint]
-ros2 topic pub /hand_joint_controller/commands std_msgs/msg/Float64MultiArray \
-  "{data: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]}"
-
-# 查看关节状态
-ros2 topic echo /joint_states
-
-# 查看控制器状态
-ros2 control list_controllers
-ros2 control list_hardware_interfaces
-```
-
-## 扩展支持新的夹爪
-
-要添加新的 Modbus 夹爪支持，只需：
-
-1. **创建新的夹爪类**（继承 `ModbusGripperBase`）：
-
-```cpp
-class NewGripper : public ModbusGripperBase {
-public:
-    bool initialize(ModbusRtuCommunicator* communicator,
-                    const std::map<std::string, std::string>& params) override;
-    bool readStatus() override;
-    bool writeCommand() override;
-    void shutdown() override;
-};
-```
-
-2. **在 `ModbusHardware::on_init()` 中添加创建逻辑**：
-
-```cpp
-if (gripper_type_ == "new_gripper") {
-    gripper_ = std::make_unique<NewGripper>(...);
-}
-```
-
-3. **实现协议特定的读写逻辑**
-
-## 依赖
-
-- `libmodbus-dev` - Modbus 通信库
-- ROS2 Control 相关包
-- `controller_manager` - 控制器管理
-- `joint_state_broadcaster` - 关节状态广播
-- `position_controllers` - 位置控制器（用于灵巧手控制）
-
-## 安装依赖
+**系统依赖**
 
 ```bash
 sudo apt-get install libmodbus-dev
-sudo apt-get install ros-${ROS_DISTRO}-controller-manager
-sudo apt-get install ros-${ROS_DISTRO}-joint-state-broadcaster
-sudo apt-get install ros-${ROS_DISTRO}-position-controllers
+sudo apt-get install ros-${ROS_DISTRO}-controller-manager \
+                     ros-${ROS_DISTRO}-joint-state-broadcaster \
+                     ros-${ROS_DISTRO}-position-controllers
 ```
 
+**编译**
+
+```bash
+cd ~/ros2_ws
+colcon build --packages-up-to modbus_ros2_control --symlink-install
+source install/setup.bash
+```
+
+**ROS 包依赖**：`hardware_interface`、`pluginlib`、`rclcpp`、`rclcpp_lifecycle`、`gripper_hardware_common`、`arms_controller_common`。
+
+## 7. 启动示例
+
+以 LinkerHand O7 独立调试为例（`basic_joint_controller` + `linkerhand_description`）：
+
+```bash
+# 串口权限（任选其一）
+sudo usermod -a -G dialout $USER && newgrp dialout
+# 或: sudo chmod 666 /dev/ttyUSB0
+
+# 启动
+ros2 launch basic_joint_controller hand.launch.py \
+  hand:=linkerhand type:=o7 hardware:=real direction:=1
+
+# 发令 / 查看状态
+ros2 topic pub /hand_joint_controller/commands std_msgs/msg/Float64MultiArray \
+  "{data: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]}"
+ros2 topic echo /joint_states
+ros2 control list_controllers
+```
+
+Inspire 单臂：`inspire_description` + `hand.launch.py`（`hardware:=real`）。双臂整机见各机器人 description 的 `robot.xacro` 与 launch。
+
+自定义 launch 要点：xacro 生成 URDF → `ros2_control_node` → 加载 `joint_state_broadcaster` 与位置控制器。可参考 `basic_joint_controller/launch/hand.launch.py`。
+
+## 8. 扩展新夹爪
+
+1. 继承 `ModbusGripperBase` 实现协议读写。
+2. 在 `ModbusHardware::on_init()` 中按 `gripper_type` 实例化。
+3. 在 `modbus_ros2_control.xml` 中注册（若为新 `SystemInterface` 则另建插件类）。
+
+## 9. TODO
+
+- [ ] **抽取 Inspire 协议公共层** — `InspireHandHardware` 与 `marvin_ros2_control::InspireHandE2`（及 CAN FD 变体）各自实现同一套寄存器协议，未复用 `gripper_hardware_common`。后续抽到 common 供 Marvin / modbus / can 共用。
+- [ ] **RH56F2 限位** — `InspireHandHardware` 关节上限仍写死为 RH56E2；F2 真机需按型号区分或从 URDF 读取。

@@ -66,13 +66,13 @@ namespace modbus_ros2_control
             );
         }
 
-        // Check if we have O7 (7 joints) or O6/L6 (6 joints) hand
+        // Check if we have O7 (7 joints) or 6-DOF hand
         if (hand_joint_names.size() != ModbusConfig::DexterousHand::JOINT_COUNT_O7 &&
             hand_joint_names.size() != ModbusConfig::DexterousHand::JOINT_COUNT_O6)
         {
             RCLCPP_ERROR(
                 get_node()->get_logger(),
-                "Dexterous hand requires exactly %d (O7) or %d (O6/L6) joints, found %zu",
+                "Dexterous hand requires exactly %d (O7) or %d (6-DOF) joints, found %zu",
                 ModbusConfig::DexterousHand::JOINT_COUNT_O7,
                 ModbusConfig::DexterousHand::JOINT_COUNT_O6,
                 hand_joint_names.size()
@@ -95,6 +95,28 @@ namespace modbus_ros2_control
         // Default: O7 for 7 joints, O6 for 6 joints (can be overridden by hand_type parameter)
         std::string product_type = hand_type_;
         std::transform(product_type.begin(), product_type.end(), product_type.begin(), ::toupper);
+        if (product_type.find("FREEDOM") != std::string::npos)
+        {
+            RCLCPP_ERROR(
+                get_node()->get_logger(),
+                "Freedom hand uses a dedicated hardware plugin: modbus_ros2_control/FreedomRS485Hardware. "
+                "Do not use DexterousHandHardware for hand_type=%s.",
+                hand_type_.c_str()
+            );
+            return hardware_interface::CallbackReturn::ERROR;
+        }
+        if (product_type.find("INSPIRE") != std::string::npos ||
+            product_type.find("RH56") != std::string::npos)
+        {
+            RCLCPP_ERROR(
+                get_node()->get_logger(),
+                "Inspire RH56 hand uses a dedicated hardware plugin: modbus_ros2_control/InspireHandHardware. "
+                "Use inspire_description inspire_rs485_side_system (or hand.xacro with hardware:=real). "
+                "Do not use DexterousHandHardware for hand_type=%s.",
+                hand_type_.c_str()
+            );
+            return hardware_interface::CallbackReturn::ERROR;
+        }
         
         // 根据关节数量和产品类型创建对应的灵巧手对象
         if (hand_joint_names.size() == ModbusConfig::DexterousHand::JOINT_COUNT_O7)
@@ -112,7 +134,6 @@ namespace modbus_ros2_control
         }
         else if (hand_joint_names.size() == ModbusConfig::DexterousHand::JOINT_COUNT_O6)
         {
-            // 6-DOF hand: determine if O6 or L6 based on hand_type parameter
             if (product_type == "L6" || product_type.find("L6") != std::string::npos)
             {
                 // L6 hand (6 joints)
@@ -411,4 +432,3 @@ PLUGINLIB_EXPORT_CLASS(
     modbus_ros2_control::DexterousHandHardware,
     hardware_interface::SystemInterface
 )
-

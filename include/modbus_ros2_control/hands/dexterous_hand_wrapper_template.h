@@ -20,7 +20,7 @@ namespace modbus_ros2_control
     {
         O7,  // 7-DOF hand
         O6,  // 6-DOF hand
-        L6   // 6-DOF hand (different model)
+        L6,  // 6-DOF hand (different model)
     };
 
     /**
