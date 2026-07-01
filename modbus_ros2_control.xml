@@ -47,4 +47,14 @@
             Commands: 0x02 realtime 12-joint position control and feedback.
         </description>
     </class>
+    <class name="modbus_ros2_control/TheoHandModbusHardware"
+           type="modbus_ros2_control::TheoHandModbusHardware"
+           base_class_type="hardware_interface::SystemInterface">
+        <description>
+            ROS2 Control Hardware Interface for TheoHand STD16A over standard Modbus RTU.
+            Defaults: /dev/ttyUSB0, slave ID 1, baudrate 115200, 8N1.
+            Registers: control word 0x0000, target positions 0x0001-0x0010,
+            real positions 0x0051-0x0060.
+        </description>
+    </class>
 </library>
