@@ -14,6 +14,7 @@
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
+  <depend>geometry_msgs</depend>
   <depend>gripper_hardware_common</depend>
   <depend>arms_controller_common</depend>
   
