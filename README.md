@@ -117,7 +117,7 @@ modbus_ros2_control/
 
 串口可通过 `robot.local.yaml` → `hardware.usb_left_ft_port` 覆盖，或 launch 传 `hardware_usb_left_ft_port:=/dev/ttyUSB1`。
 
-插件同时导出 ros2_control 状态接口，并向 Marvin 订阅的 `/left_arm_external_wrench`、`/right_arm_external_wrench` 发布 `WrenchStamped`。串口不可用或读失败时输出全 0。
+插件导出 ros2_control 状态接口（`kwr75_{left|right}_ft/force.x` …），并发布 `WrenchStamped` 到 `/left_arm_external_wrench`、`/right_arm_external_wrench` 供上层控制器订阅。`MarvinHardware` 不订阅这些 topic。串口不可用或读失败时输出全 0。
 
 ## 4. 硬件参数
 

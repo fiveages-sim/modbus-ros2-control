@@ -2,6 +2,10 @@
 
 #include "modbus_ros2_control/sensors/kwr75_serial_client.h"
 
+#include <cerrno>
+#include <cstring>
+#include <unistd.h>
+
 #include <pluginlib/class_list_macros.hpp>
 
 namespace modbus_ros2_control
@@ -96,13 +100,25 @@ hardware_interface::CallbackReturn Kwr75ForceTorqueSensor::on_activate(
   client_ = std::make_unique<Kwr75SerialClient>(
     serial_port_, baudrate_, command_code_, convert_to_si_, gravity_, response_timeout_ms_);
 
+  if (::access(serial_port_.c_str(), F_OK) != 0)
+  {
+    RCLCPP_WARN(
+      get_logger(),
+      "KWR75 传感器 '%s' 未启动：未找到 USB 串口 %s，力/力矩输出保持为 0",
+      sensor_name_.c_str(),
+      serial_port_.c_str());
+    zero_mode_ = true;
+    return hardware_interface::CallbackReturn::SUCCESS;
+  }
+
   if (!client_->connect())
   {
     RCLCPP_WARN(
       get_logger(),
-      "KWR75 port '%s' unavailable; state interfaces and %s stay zero",
+      "KWR75 传感器 '%s' 未启动：无法打开 USB 串口 %s (%s)，力/力矩输出保持为 0",
+      sensor_name_.c_str(),
       serial_port_.c_str(),
-      wrench_topic_.c_str());
+      std::strerror(errno));
     zero_mode_ = true;
     return hardware_interface::CallbackReturn::SUCCESS;
   }
@@ -112,12 +128,18 @@ hardware_interface::CallbackReturn Kwr75ForceTorqueSensor::on_activate(
   {
     RCLCPP_WARN(
       get_logger(),
-      "KWR75 warmup failed on '%s'; outputs stay zero until reads succeed",
+      "KWR75 传感器 '%s' 未就绪：串口 %s 已打开但握手失败，力/力矩输出保持为 0",
+      sensor_name_.c_str(),
       serial_port_.c_str());
   }
   else
   {
-    RCLCPP_INFO(get_logger(), "KWR75 FT sensor activated on %s", serial_port_.c_str());
+    RCLCPP_INFO(
+      get_logger(),
+      "KWR75 传感器 '%s' 已启动：串口 %s，topic %s",
+      sensor_name_.c_str(),
+      serial_port_.c_str(),
+      wrench_topic_.c_str());
   }
 
   return hardware_interface::CallbackReturn::SUCCESS;
