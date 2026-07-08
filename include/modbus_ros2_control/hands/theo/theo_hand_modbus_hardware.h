@@ -70,6 +70,9 @@ private:
   bool read_feedback(std::array<double, kJointCount>& positions);
   int send_command(const std::array<uint16_t, kJointCount>& target_positions);
   bool command_changed(const std::array<uint16_t, kJointCount>& target_positions) const;
+  bool modbus_settle_period_elapsed(
+    std::chrono::steady_clock::time_point now,
+    std::chrono::milliseconds settle_period) const;
   bool feedback_quiet_period_elapsed(
     std::chrono::steady_clock::time_point now,
     std::chrono::milliseconds quiet_period) const;
@@ -93,6 +96,7 @@ private:
   bool read_feedback_enabled_ = true;
   int background_period_ms_ = 200;
   int feedback_quiet_after_write_ms_ = 500;
+  int command_settle_ms_ = 100;
   std::atomic_bool background_period_initialized_{false};
   int command_deadband_raw_ = 1;
 
@@ -115,6 +119,7 @@ private:
   std::array<uint16_t, kJointCount> last_command_values_{};
   std::array<uint16_t, kJointCount> pending_command_values_{};
   std::atomic<int64_t> last_command_request_ms_{0};
+  std::atomic<int64_t> last_modbus_request_ms_{0};
   bool command_sent_ = false;
   bool pending_command_valid_ = false;
   bool pending_command_dirty_ = false;

@@ -16,7 +16,7 @@
 | **`InspireHandHardware`** | Inspire **RH56 系列**（E2 / F2） | URDF 6 关节；Modbus RTU（FC03/FC10）；限位写死为 RH56E2 |
 | **`FreedomRS485Hardware`** | Freedom **V1** / **V2** | `protocol_version:=auto` / `freedomv1` / `freedomv2`（或按关节数推断） |
 | **`XHand1RS485Hardware`** | **XHand1** | URDF 12 关节；专用 RS485（默认 3 Mbps） |
-| **`TheoHandModbusHardware`** | TheoHand **STD16A** | URDF 16 关节；标准 Modbus RTU（默认 115200 8N1，slave_id 1） |
+| **`TheoHandModbusHardware`** | TheoHand **STD16A** | URDF 16 关节；标准 Modbus RTU（默认 115200 8N1） |
 
 **Inspire 请使用 `InspireHandHardware`**
 
@@ -112,14 +112,14 @@ modbus_ros2_control/
     <plugin>modbus_ros2_control/TheoHandModbusHardware</plugin>
     <param name="serial_port">/dev/ttyUSB0</param>
     <param name="baudrate">115200</param>
-    <param name="slave_id">1</param>
+    <param name="slave_id">2</param>
   </hardware>
   <!-- include theohand_description/xacro/ros2_control/std16a.xacro -->
 </ros2_control>
 ```
 
 插件按官方 `wn_hand_sdk-develop_modbus` demo 在激活时写控制字 `0x0f`。STD16A 当前按传入
-`slave_id` 直接通信，不在激活阶段读取左右手寄存器；右手测试默认使用地址 `1`。
+`slave_id` 直接通信，不在激活阶段读取左右手寄存器。
 
 ## 4. 硬件参数
 
@@ -149,9 +149,8 @@ modbus_ros2_control/
 | | `hand_id` / `host_id` | `0` / `0xFE` | |
 | **TheoHandModbusHardware** | `serial_port` | `/dev/ttyUSB0` | |
 | | `baudrate` | `115200` | 协议 6.1：RS485 115200 8N1 |
-| | `slave_id` | `1` | 可按设备地址覆盖 |
-| | `read_feedback` | `false` | 需要实际位置反馈时可打开，读取 `0x0051` 起的 16 个实际位置 |
-| | `background_period_ms` | `20` | 会在第一次 read 时跟随控制周期 |
+| | `slave_id` | 左 `2`、右 `1` | 可按设备地址覆盖 |
+| | `read_feedback` | `true` | 读取 `0x0051` 起的 16 个实际位置；关闭后 RViz 显示命令位置 |
 
 ## 5. 位置单位
 

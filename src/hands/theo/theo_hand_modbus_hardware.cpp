@@ -21,6 +21,17 @@ namespace
 constexpr auto kLoggerName = "TheoHandModbusHardware";
 constexpr auto kCommandPollPeriod = std::chrono::milliseconds(5);
 
+bool is_timeout_error(const std::string& error)
+{
+  const auto lower = [&error]() {
+    std::string value = error;
+    std::transform(value.begin(), value.end(), value.begin(), ::tolower);
+    return value;
+  }();
+  return lower.find("timed out") != std::string::npos ||
+         lower.find("timeout") != std::string::npos;
+}
+
 int64_t steady_ms()
 {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -136,6 +147,7 @@ hardware_interface::CallbackReturn TheoHandModbusHardware::on_activate(
       hw_positions_[i] = initial_positions[i];
       hw_commands_[i] = hw_positions_[i];
       feedback_positions_[i] = initial_positions[i];
+      hw_efforts_[i] = 0.0;
     }
     feedback_valid_ = true;
   }
@@ -223,16 +235,17 @@ hardware_interface::return_type TheoHandModbusHardware::read(
     {
       hw_positions_ = feedback_positions_;
     }
+    hw_efforts_.fill(0.0);
   }
   else
   {
     hw_positions_ = hw_commands_;
+    hw_efforts_.fill(0.0);
   }
 
   const double dt = period.seconds();
   for (std::size_t i = 0; i < kJointCount; ++i)
   {
-    hw_efforts_[i] = 0.0;
     hw_velocities_[i] = dt > std::numeric_limits<double>::epsilon()
                           ? (hw_positions_[i] - previous_positions_[i]) / dt
                           : 0.0;
@@ -258,6 +271,20 @@ hardware_interface::return_type TheoHandModbusHardware::write(
   const auto target_positions = joints_to_registers(hw_commands_);
   {
     std::lock_guard<std::mutex> lock(command_mutex_);
+    const bool pending_same =
+      pending_command_valid_ &&
+      std::equal(
+        target_positions.begin(),
+        target_positions.end(),
+        pending_command_values_.begin(),
+        [this](uint16_t a, uint16_t b) {
+          return std::abs(static_cast<int>(a) - static_cast<int>(b)) <= command_deadband_raw_;
+        });
+    if (pending_same)
+    {
+      return hardware_interface::return_type::OK;
+    }
+
     if (command_sent_ && !command_changed(target_positions))
     {
       return hardware_interface::return_type::OK;
@@ -295,6 +322,11 @@ void TheoHandModbusHardware::load_parameters()
         "feedback_quiet_after_write_ms",
         std::to_string(feedback_quiet_after_write_ms_)),
       feedback_quiet_after_write_ms_));
+  command_settle_ms_ = std::max(
+    0,
+    parse_int(
+      get_parameter("command_settle_ms", std::to_string(command_settle_ms_)),
+      command_settle_ms_));
   command_deadband_raw_ = std::clamp(
     parse_int(get_parameter("command_deadband_raw", std::to_string(command_deadband_raw_)),
               command_deadband_raw_),
@@ -377,7 +409,9 @@ void TheoHandModbusHardware::disconnect_modbus()
 
 bool TheoHandModbusHardware::initialize_hand()
 {
-  if (!modbus_->writeRegister(kControlWordRegister, kEnableControlWord))
+  const bool ok = modbus_->writeRegister(kControlWordRegister, kEnableControlWord);
+  last_modbus_request_ms_.store(steady_ms(), std::memory_order_relaxed);
+  if (!ok)
   {
     RCLCPP_ERROR(
       rclcpp::get_logger(kLoggerName),
@@ -465,12 +499,17 @@ void TheoHandModbusHardware::background_loop()
     const auto now = std::chrono::steady_clock::now();
     const auto target_period = std::chrono::milliseconds(background_period_ms_);
     const auto feedback_quiet_period = std::chrono::milliseconds(feedback_quiet_after_write_ms_);
+    const auto command_settle_period = std::chrono::milliseconds(command_settle_ms_);
 
     std::array<uint16_t, kJointCount> target_positions{};
     bool should_send = false;
     {
       std::lock_guard<std::mutex> lock(command_mutex_);
       should_send = pending_command_valid_ && pending_command_dirty_;
+      if (should_send && !modbus_settle_period_elapsed(now, command_settle_period))
+      {
+        should_send = false;
+      }
       if (should_send)
       {
         target_positions = pending_command_values_;
@@ -490,16 +529,29 @@ void TheoHandModbusHardware::background_loop()
       else
       {
         const auto error = modbus_->getLastError();
-        std::lock_guard<std::mutex> lock(command_mutex_);
-        pending_command_dirty_ = true;
-        RCLCPP_WARN_THROTTLE(
-          rclcpp::get_logger(kLoggerName),
-          *get_node()->get_clock(),
-          1000,
-          "Failed to write TheoHand STD16A target positions: %s (wrote %d registers, expected %zu); command will be retried",
-          error.c_str(),
-          written_count,
-          target_positions.size());
+        if (written_count < 0 && is_timeout_error(error))
+        {
+          std::lock_guard<std::mutex> lock(command_mutex_);
+          pending_command_dirty_ = true;
+          RCLCPP_WARN_THROTTLE(
+            rclcpp::get_logger(kLoggerName),
+            *get_node()->get_clock(),
+            1000,
+            "TheoHand STD16A target write timed out waiting for FC16 ACK; command will be retried");
+        }
+        else
+        {
+          std::lock_guard<std::mutex> lock(command_mutex_);
+          pending_command_dirty_ = true;
+          RCLCPP_WARN_THROTTLE(
+            rclcpp::get_logger(kLoggerName),
+            *get_node()->get_clock(),
+            1000,
+            "Failed to write TheoHand STD16A target positions: %s (wrote %d registers, expected %zu); command will be retried",
+            error.c_str(),
+            written_count,
+            target_positions.size());
+        }
       }
       next_feedback_time = std::chrono::steady_clock::now() + target_period;
     }
@@ -549,6 +601,7 @@ bool TheoHandModbusHardware::read_feedback(std::array<double, kJointCount>& posi
   std::array<uint16_t, kJointCount> position_registers{};
   const auto count = modbus_->readHoldingRegisters(
     kRealPositionRegister, position_registers.size(), position_registers.data());
+  last_modbus_request_ms_.store(steady_ms(), std::memory_order_relaxed);
   if (count != static_cast<int>(position_registers.size()))
   {
     return false;
@@ -561,8 +614,10 @@ bool TheoHandModbusHardware::read_feedback(std::array<double, kJointCount>& posi
 int TheoHandModbusHardware::send_command(
   const std::array<uint16_t, kJointCount>& target_positions)
 {
-  return modbus_->writeRegisters(
+  const auto count = modbus_->writeRegisters(
     kTargetPositionRegister, target_positions.size(), target_positions.data());
+  last_modbus_request_ms_.store(steady_ms(), std::memory_order_relaxed);
+  return count;
 }
 
 bool TheoHandModbusHardware::command_changed(
@@ -597,6 +652,28 @@ bool TheoHandModbusHardware::feedback_quiet_period_elapsed(
   const auto now_ms =
     std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
   return (now_ms - last_request_ms) >= quiet_period.count();
+}
+
+bool TheoHandModbusHardware::modbus_settle_period_elapsed(
+  std::chrono::steady_clock::time_point now,
+  std::chrono::milliseconds settle_period) const
+{
+  if (settle_period <= std::chrono::milliseconds(0))
+  {
+    return true;
+  }
+
+  const auto last_request_ms = last_modbus_request_ms_.load(std::memory_order_relaxed);
+  const auto last_command_ms = last_command_request_ms_.load(std::memory_order_relaxed);
+  const auto latest_request_ms = std::max(last_request_ms, last_command_ms);
+  if (latest_request_ms == 0)
+  {
+    return true;
+  }
+
+  const auto now_ms =
+    std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+  return (now_ms - latest_request_ms) >= settle_period.count();
 }
 
 std::array<uint16_t, TheoHandModbusHardware::kJointCount>
