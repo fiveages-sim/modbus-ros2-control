@@ -119,6 +119,8 @@ modbus_ros2_control/
 
 插件导出 ros2_control 状态接口（`kwr75_{left|right}_ft/force.x` …），并发布 `WrenchStamped` 到 `/left_arm_external_wrench`、`/right_arm_external_wrench` 供上层控制器订阅。`MarvinHardware` 不订阅这些 topic。串口不可用或读失败时输出全 0。
 
+协议与坤维官方 SDK（`kwcapture.h`，`linkMode=0`、`decodeMode=0`、`kwStartCapture`）一致：激活时发送一次 `0x48 0xAA 0x0D 0x0A` 启动 1kHz 连续流，之后只读串口缓冲中的最新 28 字节帧，不再每周期 flush/重发命令。
+
 ## 4. 硬件参数
 
 | 插件 | 参数 | 默认 | 说明 |
@@ -146,10 +148,12 @@ modbus_ros2_control/
 | | `baudrate` | `3000000` | |
 | | `hand_id` / `host_id` | `0` / `0xFE` | |
 | **Kwr75ForceTorqueSensor** | `serial_port` | `/dev/ttyUSB0` | USB-RS485 转换器 |
-| | `baudrate` | `115200` | 8N1 |
-| | `command_code` | `49` | `0x48` 或 `0x49` |
+| | `baudrate` | `115200` | 8N1，与坤维 SDK `decodeMode=0` 一致 |
+| | `command_code` | `72` (`0x48`) | 启动连续采集命令首字节；部分设备为 `0x49` |
 | | `convert_to_si` | `true` | Kg→N，Kg·m→N·m |
-| | `response_timeout_ms` | `10` | 单次轮询超时 |
+| | `response_timeout_ms` | `50` | 单次读流超时（ms） |
+| | `startup_delay_ms` | `50` | 发送启动命令后等待首帧（ms） |
+| | `warmup_attempts` | `20` | 激活时握手重试次数 |
 
 ## 5. 位置单位
 

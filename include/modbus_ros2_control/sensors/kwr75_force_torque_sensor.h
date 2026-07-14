@@ -48,6 +48,7 @@ private:
 
   void load_parameters();
   void publish_wrench(const rclcpp::Time& time);
+  void stop_io_and_zero(const std::string& reason);
   static bool parse_bool(const std::string& value, bool default_value);
   static int parse_int(const std::string& value, int default_value);
 
@@ -56,11 +57,16 @@ private:
   std::string wrench_topic_;
   std::string frame_id_ = "ft_sensor";
   int baudrate_ = 115200;
-  uint8_t command_code_ = 0x49;
+  uint8_t command_code_ = 0x48;
   bool convert_to_si_ = true;
   double gravity_ = 9.80665;
-  int response_timeout_ms_ = 10;
+  int response_timeout_ms_ = 50;
+  int read_timeout_ms_ = 3;
+  int startup_delay_ms_ = 50;
+  int warmup_attempts_ = 20;
+  int max_read_failures_ = 3;
   bool zero_mode_ = false;
+  int consecutive_read_failures_ = 0;
   std::unique_ptr<Kwr75SerialClient> client_;
   rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr wrench_pub_;
   std::atomic<bool> has_valid_sample_{false};

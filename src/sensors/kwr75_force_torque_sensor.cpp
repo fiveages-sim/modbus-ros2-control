@@ -98,49 +98,61 @@ hardware_interface::CallbackReturn Kwr75ForceTorqueSensor::on_activate(
   }
 
   client_ = std::make_unique<Kwr75SerialClient>(
-    serial_port_, baudrate_, command_code_, convert_to_si_, gravity_, response_timeout_ms_);
+    serial_port_,
+    baudrate_,
+    command_code_,
+    convert_to_si_,
+    gravity_,
+    response_timeout_ms_,
+    read_timeout_ms_,
+    startup_delay_ms_,
+    warmup_attempts_);
 
   if (::access(serial_port_.c_str(), F_OK) != 0)
   {
-    RCLCPP_WARN(
-      get_logger(),
-      "KWR75 传感器 '%s' 未启动：未找到 USB 串口 %s，力/力矩输出保持为 0",
-      sensor_name_.c_str(),
-      serial_port_.c_str());
-    zero_mode_ = true;
+    stop_io_and_zero(
+      "KWR75 传感器 '" + sensor_name_ + "' 未启动：未找到 USB 串口 " + serial_port_ +
+      "，力/力矩输出保持为 0");
     return hardware_interface::CallbackReturn::SUCCESS;
   }
 
   if (!client_->connect())
   {
-    RCLCPP_WARN(
-      get_logger(),
-      "KWR75 传感器 '%s' 未启动：无法打开 USB 串口 %s (%s)，力/力矩输出保持为 0",
-      sensor_name_.c_str(),
-      serial_port_.c_str(),
-      std::strerror(errno));
-    zero_mode_ = true;
+    stop_io_and_zero(
+      "KWR75 传感器 '" + sensor_name_ + "' 未启动：无法打开 USB 串口 " + serial_port_ + " (" +
+      std::strerror(errno) + ")，力/力矩输出保持为 0");
     return hardware_interface::CallbackReturn::SUCCESS;
   }
 
-  zero_mode_ = !client_->warmup();
-  if (zero_mode_)
+  if (!client_->warmup())
   {
-    RCLCPP_WARN(
-      get_logger(),
-      "KWR75 传感器 '%s' 未就绪：串口 %s 已打开但握手失败，力/力矩输出保持为 0",
-      sensor_name_.c_str(),
-      serial_port_.c_str());
+    const std::string sample = client_->last_io_sample_hex();
+    if (sample.empty())
+    {
+      stop_io_and_zero(
+        "KWR75 传感器 '" + sensor_name_ + "' 未就绪：串口 " + serial_port_ +
+        " 已打开但无有效 28 字节帧（未收到数据）。"
+        "请确认 KWR75 USB 线已接、传感器已上电，且 robot.local.yaml 中 usb_*_ft_port 映射正确。"
+        "已停止串口读取。");
+    }
+    else
+    {
+      stop_io_and_zero(
+        "KWR75 传感器 '" + sensor_name_ + "' 未就绪：串口 " + serial_port_ + " 收到非 KWR75 数据 [" +
+        sample + "]。该端口可能接的是其他设备。"
+        "已停止串口读取。");
+    }
+    return hardware_interface::CallbackReturn::SUCCESS;
   }
-  else
-  {
-    RCLCPP_INFO(
-      get_logger(),
-      "KWR75 传感器 '%s' 已启动：串口 %s，topic %s",
-      sensor_name_.c_str(),
-      serial_port_.c_str(),
-      wrench_topic_.c_str());
-  }
+
+  consecutive_read_failures_ = 0;
+  zero_mode_ = false;
+  RCLCPP_INFO(
+    get_logger(),
+    "KWR75 传感器 '%s' 已启动：串口 %s，topic %s",
+    sensor_name_.c_str(),
+    serial_port_.c_str(),
+    wrench_topic_.c_str());
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -155,6 +167,7 @@ hardware_interface::CallbackReturn Kwr75ForceTorqueSensor::on_deactivate(
   }
   wrench_pub_.reset();
   zero_mode_ = false;
+  consecutive_read_failures_ = 0;
   has_valid_sample_.store(false);
   wrench_state_.fill(0.0);
   return hardware_interface::SensorInterface::on_deactivate(previous_state);
@@ -177,7 +190,7 @@ hardware_interface::return_type Kwr75ForceTorqueSensor::read(
   const rclcpp::Time& time,
   const rclcpp::Duration& /* period */)
 {
-  if (!client_ || zero_mode_)
+  if (zero_mode_ || !client_)
   {
     wrench_state_.fill(0.0);
     publish_wrench(time);
@@ -186,22 +199,45 @@ hardware_interface::return_type Kwr75ForceTorqueSensor::read(
 
   if (!client_->read_wrench(wrench_state_))
   {
-    RCLCPP_WARN_THROTTLE(
-      get_logger(),
-      *get_node()->get_clock(),
-      2000,
-      "Failed to read KWR75 frame from %s",
-      serial_port_.c_str());
     wrench_state_.fill(0.0);
+    ++consecutive_read_failures_;
+    if (consecutive_read_failures_ >= max_read_failures_)
+    {
+      const std::string sample = client_->last_io_sample_hex();
+      std::string reason =
+        "KWR75 传感器 '" + sensor_name_ + "' 连续 " + std::to_string(consecutive_read_failures_) +
+        " 次读取失败（" + serial_port_ + "），已停止串口读取，力/力矩输出保持为 0";
+      if (!sample.empty())
+      {
+        reason += "，最近收到: [" + sample + "]";
+      }
+      stop_io_and_zero(reason);
+    }
   }
   else
   {
+    consecutive_read_failures_ = 0;
     has_valid_sample_.store(true);
-    zero_mode_ = false;
   }
 
   publish_wrench(time);
   return hardware_interface::return_type::OK;
+}
+
+void Kwr75ForceTorqueSensor::stop_io_and_zero(const std::string& reason)
+{
+  if (!zero_mode_)
+  {
+    RCLCPP_WARN(get_logger(), "%s", reason.c_str());
+  }
+  zero_mode_ = true;
+  consecutive_read_failures_ = 0;
+  if (client_)
+  {
+    client_->disconnect();
+    client_.reset();
+  }
+  wrench_state_.fill(0.0);
 }
 
 void Kwr75ForceTorqueSensor::publish_wrench(const rclcpp::Time& time)
@@ -242,6 +278,26 @@ void Kwr75ForceTorqueSensor::load_parameters()
   response_timeout_ms_ = parse_int(
     get_param("response_timeout_ms", std::to_string(response_timeout_ms_)),
     response_timeout_ms_);
+  read_timeout_ms_ = parse_int(
+    get_param("read_timeout_ms", std::to_string(read_timeout_ms_)),
+    read_timeout_ms_);
+  if (read_timeout_ms_ < 1)
+  {
+    read_timeout_ms_ = 1;
+  }
+  startup_delay_ms_ = parse_int(
+    get_param("startup_delay_ms", std::to_string(startup_delay_ms_)),
+    startup_delay_ms_);
+  warmup_attempts_ = parse_int(
+    get_param("warmup_attempts", std::to_string(warmup_attempts_)),
+    warmup_attempts_);
+  max_read_failures_ = parse_int(
+    get_param("max_read_failures", std::to_string(max_read_failures_)),
+    max_read_failures_);
+  if (max_read_failures_ < 1)
+  {
+    max_read_failures_ = 1;
+  }
 }
 
 bool Kwr75ForceTorqueSensor::parse_bool(const std::string& value, bool default_value)

@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <iomanip>
+#include <sstream>
 #include <thread>
 #include <vector>
 
@@ -65,6 +67,32 @@ speed_t baud_to_constant(int baudrate)
   }
 }
 
+bool frame_matches(
+  const std::vector<uint8_t>& buffer,
+  std::size_t start,
+  uint8_t command_code)
+{
+  if (start + Kwr75SerialClient::kFrameLength > buffer.size())
+  {
+    return false;
+  }
+  const uint8_t header = buffer[start];
+  if (header != command_code && header != 0x48 && header != 0x49)
+  {
+    return false;
+  }
+  if (buffer[start + 1] != kFrameMarker)
+  {
+    return false;
+  }
+  if (buffer[start + Kwr75SerialClient::kFrameLength - 2] != kFrameEnd0 ||
+      buffer[start + Kwr75SerialClient::kFrameLength - 1] != kFrameEnd1)
+  {
+    return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 Kwr75SerialClient::Kwr75SerialClient(
@@ -73,13 +101,19 @@ Kwr75SerialClient::Kwr75SerialClient(
   uint8_t command_code,
   bool convert_to_si,
   double gravity,
-  int response_timeout_ms)
+  int response_timeout_ms,
+  int read_timeout_ms,
+  int startup_delay_ms,
+  int warmup_attempts)
 : serial_port_(std::move(serial_port))
 , baudrate_(baudrate)
 , command_code_(command_code)
 , convert_to_si_(convert_to_si)
 , gravity_(gravity)
 , response_timeout_ms_(response_timeout_ms)
+, read_timeout_ms_(read_timeout_ms)
+, startup_delay_ms_(startup_delay_ms)
+, warmup_attempts_(warmup_attempts)
 {
 }
 
@@ -100,6 +134,7 @@ bool Kwr75SerialClient::connect()
   }
 
   tcflush(serial_fd_, TCIOFLUSH);
+  streaming_started_ = false;
   return true;
 }
 
@@ -110,6 +145,53 @@ void Kwr75SerialClient::disconnect()
     ::close(serial_fd_);
     serial_fd_ = -1;
   }
+  streaming_started_ = false;
+}
+
+bool Kwr75SerialClient::start_capture()
+{
+  if (!is_connected())
+  {
+    return false;
+  }
+  if (streaming_started_)
+  {
+    return true;
+  }
+
+  tcflush(serial_fd_, TCIOFLUSH);
+  if (!send_start_command())
+  {
+    return false;
+  }
+
+  streaming_started_ = true;
+  return true;
+}
+
+void Kwr75SerialClient::record_io_sample(const std::vector<uint8_t>& buffer)
+{
+  if (buffer.empty())
+  {
+    last_io_sample_hex_.clear();
+    return;
+  }
+  const std::size_t sample_len = std::min(buffer.size(), std::size_t{32});
+  std::ostringstream oss;
+  oss << std::hex << std::setfill('0');
+  for (std::size_t i = 0; i < sample_len; ++i)
+  {
+    if (i > 0)
+    {
+      oss << ' ';
+    }
+    oss << std::setw(2) << static_cast<int>(buffer[i]);
+  }
+  if (buffer.size() > sample_len)
+  {
+    oss << " ...";
+  }
+  last_io_sample_hex_ = oss.str();
 }
 
 bool Kwr75SerialClient::warmup()
@@ -118,33 +200,46 @@ bool Kwr75SerialClient::warmup()
   {
     return false;
   }
-  send_request();
-  std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  if (!start_capture())
+  {
+    return false;
+  }
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(startup_delay_ms_));
+
   std::array<double, kAxisCount> wrench {};
-  return read_wrench(wrench);
+  for (int attempt = 0; attempt < warmup_attempts_; ++attempt)
+  {
+    if (read_wrench(wrench, response_timeout_ms_))
+    {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  return false;
 }
 
-bool Kwr75SerialClient::read_wrench(std::array<double, kAxisCount>& wrench_si)
+bool Kwr75SerialClient::read_wrench(std::array<double, kAxisCount>& wrench_si, int timeout_ms)
 {
   if (!is_connected())
   {
     return false;
   }
-
-  tcflush(serial_fd_, TCIFLUSH);
-  if (!send_request())
+  if (!streaming_started_ && !start_capture())
   {
     return false;
   }
 
+  const int effective_timeout = timeout_ms >= 0 ? timeout_ms : read_timeout_ms_;
+
   std::array<uint8_t, kFrameLength> frame {};
-  if (!read_response_frame(frame, response_timeout_ms_))
+  if (!read_latest_frame(frame, effective_timeout))
   {
     return false;
   }
 
   std::array<float, kAxisCount> raw_values {};
-  if (!parse_frame(frame, raw_values))
+  if (!parse_frame(frame, raw_values, command_code_))
   {
     return false;
   }
@@ -188,7 +283,7 @@ bool Kwr75SerialClient::configure_serial()
   return tcsetattr(serial_fd_, TCSANOW, &options) == 0;
 }
 
-bool Kwr75SerialClient::send_request()
+bool Kwr75SerialClient::send_start_command()
 {
   const uint8_t request[4] = {command_code_, kFrameMarker, kFrameEnd0, kFrameEnd1};
   std::size_t total_written = 0;
@@ -221,15 +316,16 @@ bool Kwr75SerialClient::send_request()
   return total_written == sizeof(request);
 }
 
-bool Kwr75SerialClient::read_response_frame(
+bool Kwr75SerialClient::read_latest_frame(
   std::array<uint8_t, kFrameLength>& frame,
   int timeout_ms)
 {
   std::vector<uint8_t> buffer;
-  buffer.reserve(kFrameLength * 2);
+  buffer.reserve(kFrameLength * 8);
   const auto deadline =
     std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
 
+  bool found = false;
   while (std::chrono::steady_clock::now() <= deadline)
   {
     fd_set read_set;
@@ -250,10 +346,14 @@ bool Kwr75SerialClient::read_response_frame(
 
     if (select_result == 0)
     {
+      if (found)
+      {
+        return true;
+      }
       continue;
     }
 
-    uint8_t chunk[64];
+    uint8_t chunk[256];
     const auto bytes_read = ::read(serial_fd_, chunk, sizeof(chunk));
     if (bytes_read < 0)
     {
@@ -273,47 +373,49 @@ bool Kwr75SerialClient::read_response_frame(
 
     for (std::size_t start = 0; start + kFrameLength <= buffer.size(); ++start)
     {
-      if (buffer[start] != command_code_ || buffer[start + 1] != kFrameMarker)
+      if (!frame_matches(buffer, start, command_code_))
       {
         continue;
       }
-      if (buffer[start + kFrameLength - 2] != kFrameEnd0 ||
-          buffer[start + kFrameLength - 1] != kFrameEnd1)
-      {
-        continue;
-      }
-
-      std::copy_n(buffer.begin() + static_cast<std::ptrdiff_t>(start), kFrameLength, frame.begin());
-      return true;
+      std::copy_n(
+        buffer.begin() + static_cast<std::ptrdiff_t>(start),
+        kFrameLength,
+        frame.begin());
+      found = true;
     }
 
-    if (buffer.size() > kFrameLength * 4)
+    if (buffer.size() > kFrameLength * 8)
     {
-      buffer.erase(buffer.begin(), buffer.end() - static_cast<std::ptrdiff_t>(kFrameLength));
+      buffer.erase(buffer.begin(), buffer.end() - static_cast<std::ptrdiff_t>(kFrameLength * 2));
     }
   }
 
-  return false;
+  if (!found)
+  {
+    record_io_sample(buffer);
+  }
+
+  return found;
 }
 
 float Kwr75SerialClient::decode_wire_float(const uint8_t* wire_bytes)
 {
-  uint8_t ieee754[4] = {
-    wire_bytes[3],
-    wire_bytes[2],
-    wire_bytes[1],
-    wire_bytes[0],
-  };
   float value = 0.0F;
-  std::memcpy(&value, ieee754, sizeof(value));
+  std::memcpy(&value, wire_bytes, sizeof(value));
   return value;
 }
 
 bool Kwr75SerialClient::parse_frame(
   const std::array<uint8_t, kFrameLength>& frame,
-  std::array<float, kAxisCount>& values)
+  std::array<float, kAxisCount>& values,
+  uint8_t command_code)
 {
-  if ((frame[0] != 0x48 && frame[0] != 0x49) || frame[1] != kFrameMarker)
+  const uint8_t header = frame[0];
+  if (header != command_code && header != 0x48 && header != 0x49)
+  {
+    return false;
+  }
+  if (frame[1] != kFrameMarker)
   {
     return false;
   }
