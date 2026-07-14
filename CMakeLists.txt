@@ -46,6 +46,7 @@ add_library(
         src/hands/linkerhand/dexterous_hand_hardware.cpp
         src/hands/freedom/freedom_rs485_hardware.cpp
         src/hands/inspire/inspire_hand_hardware.cpp
+        src/hands/theo/theo_hand_modbus_hardware.cpp
         src/hands/xhand1/xhand1_rs485_hardware.cpp
         src/sensors/kwr75_serial_client.cpp
         src/sensors/kwr75_force_torque_sensor.cpp

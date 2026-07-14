@@ -4,7 +4,7 @@
 
 ## 1. 支持的末端执行器
 
-本包注册 **6 个** `hardware_interface` 插件（见 `modbus_ros2_control.xml`）：
+本包注册 **7 个** `hardware_interface` 插件（见 `modbus_ros2_control.xml`）：
 
 | 插件 | 产品 | 识别 / 配置方式 |
 |------|------|-----------------|
@@ -16,6 +16,7 @@
 | **`InspireHandHardware`** | Inspire **RH56 系列**（E2 / F2） | URDF 6 关节；Modbus RTU（FC03/FC10）；限位写死为 RH56E2 |
 | **`FreedomRS485Hardware`** | Freedom **V1** / **V2** | `protocol_version:=auto` / `freedomv1` / `freedomv2`（或按关节数推断） |
 | **`XHand1RS485Hardware`** | **XHand1** | URDF 12 关节；专用 RS485（默认 3 Mbps） |
+| **`TheoHandModbusHardware`** | TheoHand **STD16A** | URDF 16 关节；标准 Modbus RTU（默认 115200 8N1） |
 | **`Kwr75ForceTorqueSensor`** | **KWR75** 六轴力传感器 | `type="sensor"`；专用 RS485（默认 2.5 Mbps） |
 
 **Inspire 请使用 `InspireHandHardware`**
@@ -38,6 +39,7 @@ modbus_ros2_control/
 │   ├── linkerhand/                    # DexterousHandHardware
 │   ├── inspire/                       # InspireHandHardware
 │   ├── freedom/                       # FreedomRS485Hardware
+│   ├── theo/                          # TheoHandModbusHardware
 │   └── xhand1/                        # XHand1RS485Hardware
 ├── sensors/
 │   └── kwr75_force_torque_sensor.cpp  # Kwr75ForceTorqueSensor
@@ -105,7 +107,24 @@ modbus_ros2_control/
 
 宏定义：`freedom_description`、`xhand1_description` 的 `xacro/ros2_control/side_systems.xacro`。
 
-### 3.5 KWR75 六轴力传感器（`Kwr75ForceTorqueSensor`）
+### 3.5 TheoHand STD16A（`TheoHandModbusHardware`）
+
+```xml
+<ros2_control name="theohand_system" type="system">
+  <hardware>
+    <plugin>modbus_ros2_control/TheoHandModbusHardware</plugin>
+    <param name="serial_port">/dev/ttyUSB0</param>
+    <param name="baudrate">115200</param>
+    <param name="slave_id">2</param>
+  </hardware>
+  <!-- include theohand_description/xacro/ros2_control/std16a.xacro -->
+</ros2_control>
+```
+
+插件按官方 `wn_hand_sdk-develop_modbus` demo 在激活时写控制字 `0x0f`。STD16A 当前按传入
+`slave_id` 直接通信，不在激活阶段读取左右手寄存器。
+
+### 3.6 KWR75 六轴力传感器（`Kwr75ForceTorqueSensor`）
 
 在 `m6_ccs_description/xacro/ros2_control/ft_sensor_systems.xacro` 中按真机配置自动挂载（与 `external_ee_systems` 相同模式）：
 
@@ -147,6 +166,10 @@ modbus_ros2_control/
 | **XHand1RS485Hardware** | `serial_port` | `/dev/ttyUSB0` | |
 | | `baudrate` | `3000000` | |
 | | `hand_id` / `host_id` | `0` / `0xFE` | |
+| **TheoHandModbusHardware** | `serial_port` | `/dev/ttyUSB0` | |
+| | `baudrate` | `115200` | 协议 6.1：RS485 115200 8N1 |
+| | `slave_id` | 左 `2`、右 `1` | 可按设备地址覆盖 |
+| | `read_feedback` | `true` | 读取 `0x0051` 起的 16 个实际位置；关闭后 RViz 显示命令位置 |
 | **Kwr75ForceTorqueSensor** | `serial_port` | `/dev/ttyUSB0` | USB-RS485 转换器 |
 | | `baudrate` | `115200` | 8N1，与坤维 SDK `decodeMode=0` 一致 |
 | | `command_code` | `72` (`0x48`) | 启动连续采集命令首字节；部分设备为 `0x49` |
@@ -163,6 +186,7 @@ modbus_ros2_control/
 | LinkerHand O6/O7 | 0.0 ~ 1.0（弯曲→伸直） | 0–255 |
 | Inspire RH56 | 弧度（rad） | 寄存器原始值约 500–1750 |
 | Freedom / XHand1 | 弧度（rad） | 各协议自定义映射 |
+| TheoHand STD16A | 弧度 / 米（按 URDF 关节限位归一化） | 0–9000（协议位置单位约等于 0.01 deg） |
 
 ## 6. 编译与依赖
 
