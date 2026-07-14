@@ -47,4 +47,13 @@
             Commands: 0x02 realtime 12-joint position control and feedback.
         </description>
     </class>
+    <class name="modbus_ros2_control/Kwr75ForceTorqueSensor"
+           type="modbus_ros2_control::Kwr75ForceTorqueSensor"
+           base_class_type="hardware_interface::SensorInterface">
+        <description>
+            KWR75 six-axis force/torque sensor over custom RS485 (USB-RS485 adapter).
+            Defaults: /dev/ttyUSB0, baudrate 115200, 8N1, command 0x49.
+            Poll command 0x49 0xAA 0x0D 0x0A, response 28-byte float frame.
+        </description>
+    </class>
 </library>

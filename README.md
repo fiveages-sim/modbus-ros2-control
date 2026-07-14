@@ -4,7 +4,7 @@
 
 ## 1. 支持的末端执行器
 
-本包注册 **5 个** `hardware_interface::SystemInterface` 插件（见 `modbus_ros2_control.xml`）：
+本包注册 **6 个** `hardware_interface` 插件（见 `modbus_ros2_control.xml`）：
 
 | 插件 | 产品 | 识别 / 配置方式 |
 |------|------|-----------------|
@@ -16,6 +16,7 @@
 | **`InspireHandHardware`** | Inspire **RH56 系列**（E2 / F2） | URDF 6 关节；Modbus RTU（FC03/FC10）；限位写死为 RH56E2 |
 | **`FreedomRS485Hardware`** | Freedom **V1** / **V2** | `protocol_version:=auto` / `freedomv1` / `freedomv2`（或按关节数推断） |
 | **`XHand1RS485Hardware`** | **XHand1** | URDF 12 关节；专用 RS485（默认 3 Mbps） |
+| **`Kwr75ForceTorqueSensor`** | **KWR75** 六轴力传感器 | `type="sensor"`；专用 RS485（默认 2.5 Mbps） |
 
 **Inspire 请使用 `InspireHandHardware`**
 
@@ -38,6 +39,8 @@ modbus_ros2_control/
 │   ├── inspire/                       # InspireHandHardware
 │   ├── freedom/                       # FreedomRS485Hardware
 │   └── xhand1/                        # XHand1RS485Hardware
+├── sensors/
+│   └── kwr75_force_torque_sensor.cpp  # Kwr75ForceTorqueSensor
 ├── modbus_hardware.cpp                # 夹爪插件入口
 └── modbus_ros2_control.xml            # 插件清单
 ```
@@ -102,6 +105,22 @@ modbus_ros2_control/
 
 宏定义：`freedom_description`、`xhand1_description` 的 `xacro/ros2_control/side_systems.xacro`。
 
+### 3.5 KWR75 六轴力传感器（`Kwr75ForceTorqueSensor`）
+
+在 `m6_ccs_description/xacro/ros2_control/ft_sensor_systems.xacro` 中按真机配置自动挂载（与 `external_ee_systems` 相同模式）：
+
+```xml
+<xacro:ft_sensor_systems
+  usb_left_ft_port="$(arg usb_left_ft_port)"
+  usb_right_ft_port="$(arg usb_right_ft_port)"/>
+```
+
+串口可通过 `robot.local.yaml` → `hardware.usb_left_ft_port` 覆盖，或 launch 传 `hardware_usb_left_ft_port:=/dev/ttyUSB1`。
+
+插件导出 ros2_control 状态接口（`kwr75_{left|right}_ft/force.x` …），并发布 `WrenchStamped` 到 `/left_arm_external_wrench`、`/right_arm_external_wrench` 供上层控制器订阅。`MarvinHardware` 不订阅这些 topic。串口不可用或读失败时输出全 0。
+
+协议与坤维官方 SDK（`kwcapture.h`，`linkMode=0`、`decodeMode=0`、`kwStartCapture`）一致：激活时发送一次 `0x48 0xAA 0x0D 0x0A` 启动 1kHz 连续流，之后只读串口缓冲中的最新 28 字节帧，不再每周期 flush/重发命令。
+
 ## 4. 硬件参数
 
 | 插件 | 参数 | 默认 | 说明 |
@@ -128,6 +147,13 @@ modbus_ros2_control/
 | **XHand1RS485Hardware** | `serial_port` | `/dev/ttyUSB0` | |
 | | `baudrate` | `3000000` | |
 | | `hand_id` / `host_id` | `0` / `0xFE` | |
+| **Kwr75ForceTorqueSensor** | `serial_port` | `/dev/ttyUSB0` | USB-RS485 转换器 |
+| | `baudrate` | `115200` | 8N1，与坤维 SDK `decodeMode=0` 一致 |
+| | `command_code` | `72` (`0x48`) | 启动连续采集命令首字节；部分设备为 `0x49` |
+| | `convert_to_si` | `true` | Kg→N，Kg·m→N·m |
+| | `response_timeout_ms` | `50` | 单次读流超时（ms） |
+| | `startup_delay_ms` | `50` | 发送启动命令后等待首帧（ms） |
+| | `warmup_attempts` | `20` | 激活时握手重试次数 |
 
 ## 5. 位置单位
 

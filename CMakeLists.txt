@@ -22,6 +22,7 @@ find_package(ament_cmake REQUIRED)
 foreach (Dependency IN ITEMS ${THIS_PACKAGE_INCLUDE_DEPENDS})
     find_package(${Dependency} REQUIRED)
 endforeach ()
+find_package(geometry_msgs REQUIRED)
 
 # Find libmodbus
 find_library(MODBUS_LIBRARY
@@ -46,6 +47,8 @@ add_library(
         src/hands/freedom/freedom_rs485_hardware.cpp
         src/hands/inspire/inspire_hand_hardware.cpp
         src/hands/xhand1/xhand1_rs485_hardware.cpp
+        src/sensors/kwr75_serial_client.cpp
+        src/sensors/kwr75_force_torque_sensor.cpp
 )
 
 target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
@@ -59,6 +62,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         ${pluginlib_TARGETS}
         ${rclcpp_TARGETS}
         ${rclcpp_lifecycle_TARGETS}
+        ${geometry_msgs_TARGETS}
         gripper_hardware_common::gripper_hardware_common
         arms_controller_common::arms_controller_common
 )
