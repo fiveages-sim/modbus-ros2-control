@@ -65,6 +65,8 @@ private:
   static constexpr uint8_t kRealtimeCommand = 0x02;
   static constexpr uint16_t kDisabledControlMode = 0;
   static constexpr uint16_t kPositionMode = 3;
+  static constexpr int kReadWriteRateHz = 50;
+  static constexpr int kReadWritePeriodMs = 1000 / kReadWriteRateHz;
   static constexpr double kMaxVelocityRadPerSec = 30.0;
   static constexpr uint16_t kMaxTorqueLimit = 300;
 
@@ -122,7 +124,6 @@ private:
   bool read_feedback_ = true;
   bool require_initial_feedback_ = true;
   int feedback_timeout_ms_ = 50;
-  int background_period_ms_ = 12;
   double command_deadband_rad_ = 0.001;
   int16_t kp_ = 100;
   int16_t ki_ = 0;
