@@ -1,5 +1,6 @@
 #include "modbus_ros2_control/modbus_hardware.h"
 #include "modbus_ros2_control/grippers/changingtek_gripper.h"
+#include "modbus_ros2_control/grippers/jodell_gripper.h"
 #include "modbus_ros2_control/grippers/modbus_gripper_base.h"
 #include <pluginlib/class_list_macros.hpp>
 #include <algorithm>
@@ -42,12 +43,26 @@ namespace modbus_ros2_control
             stop_bits_
         );
 
-        // 创建夹爪对象
-        gripper_ = std::make_unique<ChangingtekGripper>(
-            get_node()->get_logger(),
-            get_node()->get_clock(),
-            gripper_joint_name
-        );
+        // 应用事务超时（需在 connect 前设置）
+        modbus_communicator_->setTimeouts(response_timeout_ms_, byte_timeout_ms_);
+
+        // 创建夹爪对象（按 gripper_type_ 分派）
+        if (gripper_type_ == "jodell")
+        {
+            gripper_ = std::make_unique<JodellGripper>(
+                get_node()->get_logger(),
+                get_node()->get_clock(),
+                gripper_joint_name
+            );
+        }
+        else
+        {
+            gripper_ = std::make_unique<ChangingtekGripper>(
+                get_node()->get_logger(),
+                get_node()->get_clock(),
+                gripper_joint_name
+            );
+        }
 
         RCLCPP_INFO(
             get_node()->get_logger(),
@@ -250,6 +265,11 @@ namespace modbus_ros2_control
                 : "90c";
             default_params = ChangingtekGripper::getDefaultModbusParams(variant);
         }
+        else if (gripper_type_ == "jodell")
+        {
+            // Jodell RG75（slave 0x09，默认 115200 8N1）
+            default_params = JodellGripper::getDefaultModbusParams();
+        }
         else
         {
             // 未知类型的默认值（通用 Modbus RTU 配置）
@@ -300,14 +320,23 @@ namespace modbus_ros2_control
         {
             stop_bits_ = std::stoi(it->second);
         }
+        it = params.find("response_timeout_ms");
+        if (it != params.end())
+        {
+            response_timeout_ms_ = std::stoi(it->second);
+        }
+        it = params.find("byte_timeout_ms");
+        if (it != params.end())
+        {
+            byte_timeout_ms_ = std::stoi(it->second);
+        }
     }
 
     bool ModbusHardware::createGripper()
     {
-        // 目前只支持 Changingtek，未来可以扩展
-        if (gripper_type_ == "changingtek")
+        // 支持 Changingtek（90C/90D）与 Jodell（RG75），均在 on_init 中创建
+        if (gripper_type_ == "changingtek" || gripper_type_ == "jodell")
         {
-            // 已在 on_init 中创建
             return true;
         }
 

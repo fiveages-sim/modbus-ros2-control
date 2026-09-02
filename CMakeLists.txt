@@ -41,6 +41,7 @@ add_library(
         src/communicator/modbus_rtu_communicator.cpp
         src/grippers/modbus_gripper_base.cpp
         src/grippers/changingtek_gripper.cpp
+        src/grippers/jodell_gripper.cpp
         src/modbus_hardware.cpp
         src/hands/dexterous_hand_base.cpp
         src/hands/linkerhand/dexterous_hand_hardware.cpp
