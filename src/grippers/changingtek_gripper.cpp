@@ -163,9 +163,7 @@ namespace modbus_ros2_control
             return false;
         }
 
-        // 延时确保数据写入（减少延时，因为写入在后台线程中）
-        usleep(100000); // 100ms（从500ms减少到100ms）
-
+        // 位置写已同步 ACK，立即补触发；去掉固定 100ms 延时（若实测不可靠再加回）
         // 步骤2：触发运动
         if (!communicator_->writeRegister(getTriggerRegAddr(), Changingtek90C::TRIGGER_VALUE))
         {

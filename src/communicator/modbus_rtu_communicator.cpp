@@ -28,6 +28,12 @@ ModbusRtuCommunicator::~ModbusRtuCommunicator() {
     disconnect();
 }
 
+void ModbusRtuCommunicator::setTimeouts(int response_timeout_ms, int byte_timeout_ms)
+{
+    response_timeout_ms_ = (response_timeout_ms > 0) ? response_timeout_ms : 0;
+    byte_timeout_ms_ = (byte_timeout_ms > 0) ? byte_timeout_ms : 0;
+}
+
 bool ModbusRtuCommunicator::connect() {
     if (connected_) {
         return true;
@@ -63,17 +69,15 @@ bool ModbusRtuCommunicator::connect() {
     // 设置调试模式（默认关闭）
     modbus_set_debug(modbus_ctx_, 0);
 
-    // 设置超时时间（响应超时和字节超时）
-    // 响应超时：500ms（等待响应的最大时间）
-    // 字节超时：100ms（两个字节之间的最大间隔时间）
+    // 设置超时时间（响应超时和字节超时），默认 500/100，ModbusHardware 可按参数覆盖
     struct timeval response_timeout;
-    response_timeout.tv_sec = 0;
-    response_timeout.tv_usec = 500000; // 500ms
+    response_timeout.tv_sec = response_timeout_ms_ / 1000;
+    response_timeout.tv_usec = (response_timeout_ms_ % 1000) * 1000;
     modbus_set_response_timeout(modbus_ctx_, response_timeout.tv_sec, response_timeout.tv_usec);
 
     struct timeval byte_timeout;
-    byte_timeout.tv_sec = 0;
-    byte_timeout.tv_usec = 100000; // 100ms
+    byte_timeout.tv_sec = byte_timeout_ms_ / 1000;
+    byte_timeout.tv_usec = (byte_timeout_ms_ % 1000) * 1000;
     modbus_set_byte_timeout(modbus_ctx_, byte_timeout.tv_sec, byte_timeout.tv_usec);
 
     // 设置从站地址
@@ -137,6 +141,32 @@ int ModbusRtuCommunicator::writeRegisters(uint16_t addr, int count, const uint16
     }
 
     return modbus_write_registers(modbus_ctx_, addr, count, src);
+}
+
+bool ModbusRtuCommunicator::writeRegistersNoAck(uint16_t addr, int count, const uint16_t* src) {
+    if (!connected_ || !modbus_ctx_) {
+        return false;
+    }
+
+    // 与天机485一致：只发帧，不强制等写 ACK。
+    // 缩短响应超时；若超时则视为帧已发出（设备不回写 ACK），不算失败。
+    uint32_t orig_sec = 0, orig_usec = 0;
+    modbus_get_response_timeout(modbus_ctx_, &orig_sec, &orig_usec);
+
+    modbus_set_response_timeout(modbus_ctx_, 0, 30000); // 30ms
+
+    const int rc = modbus_write_registers(modbus_ctx_, addr, count, src);
+
+    modbus_set_response_timeout(modbus_ctx_, orig_sec, orig_usec);
+
+    if (rc == count) {
+        return true;
+    }
+    // 超时 = 帧已发出但设备未回 ACK → 视为成功（fire-and-forget）
+    if (rc == -1 && (errno == ETIMEDOUT || errno == ECANCELED)) {
+        return true;
+    }
+    return false;
 }
 
 void ModbusRtuCommunicator::setDebug(bool debug) {
