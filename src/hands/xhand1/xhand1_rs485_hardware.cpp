@@ -76,6 +76,15 @@ hardware_interface::CallbackReturn XHand1RS485Hardware::on_init(
   load_parameters();
   declare_tool_parameters();
 
+  if (info_.rw_rate == 0)
+  {
+    RCLCPP_ERROR(
+      rclcpp::get_logger(kLoggerName),
+      "XHAND1 RS485 hardware requires a positive rw_rate");
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+  read_write_rate_hz_ = info_.rw_rate;
+
   if (info_.joints.size() != kJointCount)
   {
     RCLCPP_ERROR(
@@ -118,10 +127,11 @@ hardware_interface::CallbackReturn XHand1RS485Hardware::on_init(
 
   RCLCPP_INFO(
     rclcpp::get_logger(kLoggerName),
-    "Configured XHAND1 RS485 hardware: joints=%zu, port=%s, baudrate=%d, host_id=0x%02X, hand_id=0x%02X, board_id=0x%02X, feedback=%s, kp=%d, ki=%d, kd=%d, torque_limit=%u",
+    "Configured XHAND1 RS485 hardware: joints=%zu, port=%s, baudrate=%d, rw_rate=%u Hz, host_id=0x%02X, hand_id=0x%02X, board_id=0x%02X, feedback=%s, kp=%d, ki=%d, kd=%d, torque_limit=%u",
     kJointCount,
     serial_port_.c_str(),
     baudrate_,
+    read_write_rate_hz_,
     host_id_,
     hand_id_,
     static_cast<uint8_t>(hand_id_ | 0x80),
@@ -337,9 +347,6 @@ void XHand1RS485Hardware::load_parameters()
   feedback_timeout_ms_ = std::max(
     1, parse_int(get_parameter("feedback_timeout_ms", std::to_string(feedback_timeout_ms_)),
                  feedback_timeout_ms_));
-  background_period_ms_ = std::max(
-    1, parse_int(get_parameter("background_period_ms", std::to_string(background_period_ms_)),
-                 background_period_ms_));
   command_deadband_rad_ = std::max(
     0.0,
     parse_double(
@@ -668,7 +675,8 @@ void XHand1RS485Hardware::background_loop()
     }
 
     const auto elapsed = std::chrono::steady_clock::now() - loop_start;
-    const auto target_period = std::chrono::milliseconds(background_period_ms_);
+    const auto target_period = std::chrono::duration<double>(
+      1.0 / static_cast<double>(read_write_rate_hz_));
     if (elapsed < target_period)
     {
       std::this_thread::sleep_for(target_period - elapsed);
@@ -682,12 +690,18 @@ XHand1RS485Hardware::compute_limited_command_positions(
   double period_seconds) const
 {
   std::array<double, kJointCount> limited_positions{};
+  const double communication_period_seconds =
+    1.0 / static_cast<double>(read_write_rate_hz_);
+  const double interpolation_period_seconds =
+    std::max(communication_period_seconds, period_seconds);
+
   for (std::size_t i = 0; i < kJointCount; ++i)
   {
     const double target = std::clamp(target_positions[i], lower_limits_[i], upper_limits_[i]);
     const double current = command_sent_ ? last_command_positions_[i] : hw_positions_[i];
     const double velocity_scale = std::clamp(hw_velocity_scales_[i], 0.0, 1.0);
-    const double max_step = kMaxVelocityRadPerSec * velocity_scale * std::max(0.0, period_seconds);
+    const double max_step =
+      kMaxVelocityRadPerSec * velocity_scale * interpolation_period_seconds;
     const double delta = target - current;
 
     if (max_step <= std::numeric_limits<double>::epsilon() || std::abs(delta) <= max_step)

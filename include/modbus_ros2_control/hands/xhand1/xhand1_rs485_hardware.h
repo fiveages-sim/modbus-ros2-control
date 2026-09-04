@@ -122,13 +122,13 @@ private:
   bool read_feedback_ = true;
   bool require_initial_feedback_ = true;
   int feedback_timeout_ms_ = 50;
-  int background_period_ms_ = 12;
   double command_deadband_rad_ = 0.001;
   int16_t kp_ = 100;
   int16_t ki_ = 0;
   int16_t kd_ = 0;
   uint16_t torque_limit_ = kMaxTorqueLimit;
   uint16_t control_mode_ = kPositionMode;
+  unsigned int read_write_rate_hz_ = 50;
   double tool_torque_scale_ = 1.0;
   double tool_velocity_scale_ = 1.0;
   int serial_fd_ = -1;
