@@ -65,8 +65,6 @@ private:
   static constexpr uint8_t kRealtimeCommand = 0x02;
   static constexpr uint16_t kDisabledControlMode = 0;
   static constexpr uint16_t kPositionMode = 3;
-  static constexpr int kReadWriteRateHz = 50;
-  static constexpr int kReadWritePeriodMs = 1000 / kReadWriteRateHz;
   static constexpr double kMaxVelocityRadPerSec = 30.0;
   static constexpr uint16_t kMaxTorqueLimit = 300;
 
@@ -130,6 +128,7 @@ private:
   int16_t kd_ = 0;
   uint16_t torque_limit_ = kMaxTorqueLimit;
   uint16_t control_mode_ = kPositionMode;
+  unsigned int read_write_rate_hz_ = 50;
   double tool_torque_scale_ = 1.0;
   double tool_velocity_scale_ = 1.0;
   int serial_fd_ = -1;
