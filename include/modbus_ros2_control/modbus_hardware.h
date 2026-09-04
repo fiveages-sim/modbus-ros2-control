@@ -104,6 +104,8 @@ private:
     char parity_;                   // 校验位
     int data_bits_;                 // 数据位
     int stop_bits_;                 // 停止位
+    int response_timeout_ms_ = 100; // 事务响应超时(ms)
+    int byte_timeout_ms_ = 50;      // 字节间隔超时(ms)
 
     // 辅助方法
     /**

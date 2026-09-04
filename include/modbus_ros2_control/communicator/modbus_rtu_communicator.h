@@ -88,16 +88,42 @@ public:
     int writeRegisters(uint16_t addr, int count, const uint16_t* src);
 
     /**
+     * @brief 写入多个保持寄存器（fire-and-forget，不要求设备回 ACK）
+     *
+     * 与天机485（marvin_ros2_control / ModbusIO）一致：只把帧发出，不阻塞等待写响应。
+     * 某些 485 从站（如 Jodell RG75）对 FC10 写不回 ACK，标准 modbus_write_registers
+     * 会因响应超时而报错；本方法将“已发出但超时无 ACK”视为成功。
+     *
+     * @param addr 起始寄存器地址
+     * @param count 写入的寄存器数量
+     * @param src 源数据缓冲区
+     * @return 帧已成功发出返回 true
+     */
+    bool writeRegistersNoAck(uint16_t addr, int count, const uint16_t* src);
+
+    /**
      * @brief 设置调试模式
      * @param debug 是否启用调试（1=启用，0=禁用）
      */
     void setDebug(bool debug);
 
     /**
+     * @brief 设置事务超时（需在 connect() 之前调用）
+     * @param response_timeout_ms 响应超时（毫秒）
+     * @param byte_timeout_ms 字节间隔超时（毫秒）
+     */
+    void setTimeouts(int response_timeout_ms, int byte_timeout_ms);
+
+    /**
      * @brief 获取最后的错误信息
      * @return 错误信息字符串
      */
     std::string getLastError() const;
+
+    /// 连接参数只读访问（用于错误日志）
+    const std::string& getSerialPort() const { return serial_port_; }
+    uint32_t getBaudrate() const { return baudrate_; }
+    int getSlaveId() const { return slave_id_; }
 
 private:
     std::string serial_port_;
@@ -106,6 +132,8 @@ private:
     char parity_;
     int data_bits_;
     int stop_bits_;
+    int response_timeout_ms_ = 500; // 响应超时(ms)
+    int byte_timeout_ms_ = 100;     // 字节间隔超时(ms)
     
     modbus_t* modbus_ctx_;
     bool connected_;
