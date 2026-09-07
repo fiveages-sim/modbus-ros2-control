@@ -151,6 +151,8 @@ hardware_interface::CallbackReturn XHand1RS485Hardware::on_activate(
   last_state_feedback_sequence_ = 0;
   feedback_timestamp_ = {};
   last_state_feedback_timestamp_ = {};
+  last_write_timestamp_ = {};
+  last_write_timestamp_valid_ = false;
   for (std::size_t i = 0; i < kJointCount; ++i)
   {
     hw_commands_[i] = hw_positions_[i];
@@ -347,9 +349,8 @@ hardware_interface::return_type XHand1RS485Hardware::write(
         std::lround(static_cast<double>(torque_limit_) * hw_effort_scales_[i]));
     }
 
-    const double interpolation_period = feedback_valid
-      ? std::chrono::duration<double>(
-          now - latest_feedback_timestamp).count()
+    const double interpolation_period = last_write_timestamp_valid_
+      ? std::chrono::duration<double>(now - last_write_timestamp_).count()
       : period.seconds();
     const auto& interpolation_origin =
       feedback_valid ? latest_feedback_positions : hw_positions_;
@@ -360,6 +361,8 @@ hardware_interface::return_type XHand1RS485Hardware::write(
     pending_command_torque_limits_ = torque_limits;
     pending_command_valid_ = true;
     pending_command_dirty_ = true;
+    last_write_timestamp_ = now;
+    last_write_timestamp_valid_ = true;
   }
   command_cv_.notify_one();
 
@@ -741,11 +744,11 @@ std::array<double, XHand1RS485Hardware::kJointCount>
 XHand1RS485Hardware::compute_limited_command_positions(
   const std::array<double, kJointCount>& target_positions,
   const std::array<double, kJointCount>& feedback_positions,
-  double elapsed_since_feedback_seconds) const
+  double elapsed_since_last_write_seconds) const
 {
   std::array<double, kJointCount> limited_positions{};
   const double interpolation_period_seconds =
-    std::max(0.0, elapsed_since_feedback_seconds);
+    std::max(0.0, elapsed_since_last_write_seconds);
 
   for (std::size_t i = 0; i < kJointCount; ++i)
   {
@@ -826,6 +829,7 @@ void XHand1RS485Hardware::initialize_state_from_feedback()
   command_sent_ = false;
   pending_command_valid_ = false;
   pending_command_dirty_ = false;
+  last_write_timestamp_valid_ = false;
 }
 
 bool XHand1RS485Hardware::exchange_realtime_frame(

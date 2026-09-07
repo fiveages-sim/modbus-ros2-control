@@ -85,7 +85,7 @@ private:
   std::array<double, kJointCount> compute_limited_command_positions(
     const std::array<double, kJointCount>& target_positions,
     const std::array<double, kJointCount>& feedback_positions,
-    double elapsed_since_feedback_seconds) const;
+    double elapsed_since_last_write_seconds) const;
   bool send_realtime_command(
     const std::array<double, kJointCount>& commands,
     const std::array<uint16_t, kJointCount>& torque_limits);
@@ -161,8 +161,10 @@ private:
   std::array<double, kJointCount> feedback_efforts_{};
   std::chrono::steady_clock::time_point feedback_timestamp_{};
   std::chrono::steady_clock::time_point last_state_feedback_timestamp_{};
+  std::chrono::steady_clock::time_point last_write_timestamp_{};
   uint64_t feedback_sequence_ = 0;
   uint64_t last_state_feedback_sequence_ = 0;
+  bool last_write_timestamp_valid_ = false;
   bool feedback_positions_valid_ = false;
 };
 
