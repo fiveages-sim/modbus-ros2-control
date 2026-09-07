@@ -22,6 +22,7 @@ namespace modbus_ros2_control
 namespace
 {
 constexpr auto kLoggerName = "XHand1RS485Hardware";
+constexpr auto kFeedbackFreshnessTimeout = std::chrono::milliseconds(200);
 
 speed_t baud_to_constant(int baudrate)
 {
@@ -315,16 +316,20 @@ hardware_interface::return_type XHand1RS485Hardware::write(
     latest_feedback_positions = feedback_positions_;
     latest_feedback_timestamp = feedback_timestamp_;
   }
+  const auto now = std::chrono::steady_clock::now();
+  const bool feedback_fresh = feedback_valid &&
+    now - latest_feedback_timestamp <= kFeedbackFreshnessTimeout;
 
   {
     std::lock_guard<std::mutex> lock(command_mutex_);
-    if (read_feedback_ && require_initial_feedback_ && !feedback_valid)
+    if (read_feedback_ && require_initial_feedback_ && !feedback_fresh)
     {
       RCLCPP_WARN_THROTTLE(
         rclcpp::get_logger(kLoggerName),
         *get_node()->get_clock(),
         1000,
-        "Suppressing XHAND1 position command until initial feedback is available");
+        "Suppressing XHAND1 position command: feedback is unavailable or older than 200 ms");
+      pending_command_valid_ = false;
       pending_command_dirty_ = true;
       command_cv_.notify_one();
       return hardware_interface::return_type::OK;
@@ -344,7 +349,7 @@ hardware_interface::return_type XHand1RS485Hardware::write(
 
     const double interpolation_period = feedback_valid
       ? std::chrono::duration<double>(
-          std::chrono::steady_clock::now() - latest_feedback_timestamp).count()
+          now - latest_feedback_timestamp).count()
       : period.seconds();
     const auto& interpolation_origin =
       feedback_valid ? latest_feedback_positions : hw_positions_;
@@ -651,18 +656,29 @@ void XHand1RS485Hardware::background_loop()
   while (background_running_.load())
   {
     bool feedback_valid = false;
+    std::chrono::steady_clock::time_point feedback_timestamp{};
     {
       std::lock_guard<std::mutex> feedback_lock(feedback_mutex_);
       feedback_valid = feedback_positions_valid_;
+      feedback_timestamp = feedback_timestamp_;
     }
-    if (read_feedback_ && require_initial_feedback_ && !feedback_valid)
+    const bool feedback_fresh = feedback_valid &&
+      std::chrono::steady_clock::now() - feedback_timestamp <=
+        kFeedbackFreshnessTimeout;
+    if (read_feedback_ && require_initial_feedback_ && !feedback_fresh)
     {
       if (probe_initial_feedback())
       {
         initialize_state_from_feedback();
         RCLCPP_INFO(
           rclcpp::get_logger(kLoggerName),
-          "Initialized XHAND1 joint state from delayed startup feedback; holding current hand position");
+          "Initialized XHAND1 joint state from fresh feedback; holding current hand position");
+      }
+      else
+      {
+        std::lock_guard<std::mutex> command_lock(command_mutex_);
+        pending_command_valid_ = false;
+        pending_command_dirty_ = false;
       }
     }
 
