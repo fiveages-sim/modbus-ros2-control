@@ -22,6 +22,7 @@ namespace modbus_ros2_control
 namespace
 {
 constexpr auto kLoggerName = "XHand1RS485Hardware";
+constexpr auto kFeedbackFreshnessTimeout = std::chrono::milliseconds(200);
 
 speed_t baud_to_constant(int baudrate)
 {
@@ -76,15 +77,6 @@ hardware_interface::CallbackReturn XHand1RS485Hardware::on_init(
   load_parameters();
   declare_tool_parameters();
 
-  if (info_.rw_rate == 0)
-  {
-    RCLCPP_ERROR(
-      rclcpp::get_logger(kLoggerName),
-      "XHAND1 RS485 hardware requires a positive rw_rate");
-    return hardware_interface::CallbackReturn::ERROR;
-  }
-  read_write_rate_hz_ = info_.rw_rate;
-
   if (info_.joints.size() != kJointCount)
   {
     RCLCPP_ERROR(
@@ -127,11 +119,10 @@ hardware_interface::CallbackReturn XHand1RS485Hardware::on_init(
 
   RCLCPP_INFO(
     rclcpp::get_logger(kLoggerName),
-    "Configured XHAND1 RS485 hardware: joints=%zu, port=%s, baudrate=%d, rw_rate=%u Hz, host_id=0x%02X, hand_id=0x%02X, board_id=0x%02X, feedback=%s, kp=%d, ki=%d, kd=%d, torque_limit=%u",
+    "Configured XHAND1 RS485 hardware: joints=%zu, port=%s, baudrate=%d, host_id=0x%02X, hand_id=0x%02X, board_id=0x%02X, feedback=%s, kp=%d, ki=%d, kd=%d, torque_limit=%u",
     kJointCount,
     serial_port_.c_str(),
     baudrate_,
-    read_write_rate_hz_,
     host_id_,
     hand_id_,
     static_cast<uint8_t>(hand_id_ | 0x80),
@@ -156,6 +147,12 @@ hardware_interface::CallbackReturn XHand1RS485Hardware::on_activate(
   pending_command_valid_ = false;
   pending_command_dirty_ = false;
   feedback_positions_valid_ = false;
+  feedback_sequence_ = 0;
+  last_state_feedback_sequence_ = 0;
+  feedback_timestamp_ = {};
+  last_state_feedback_timestamp_ = {};
+  last_write_timestamp_ = {};
+  last_write_timestamp_valid_ = false;
   for (std::size_t i = 0; i < kJointCount; ++i)
   {
     hw_commands_[i] = hw_positions_[i];
@@ -255,29 +252,48 @@ hardware_interface::return_type XHand1RS485Hardware::read(
     return hardware_interface::return_type::ERROR;
   }
 
-  previous_positions_ = hw_positions_;
-
   if (read_feedback_)
   {
     std::lock_guard<std::mutex> lock(feedback_mutex_);
-    if (feedback_positions_valid_)
+    if (feedback_positions_valid_ && feedback_sequence_ != last_state_feedback_sequence_)
     {
+      previous_positions_ = hw_positions_;
       hw_positions_ = feedback_positions_;
       hw_efforts_ = feedback_efforts_;
+
+      if (last_state_feedback_sequence_ != 0)
+      {
+        const double feedback_dt = std::chrono::duration<double>(
+          feedback_timestamp_ - last_state_feedback_timestamp_).count();
+        for (std::size_t i = 0; i < kJointCount; ++i)
+        {
+          hw_velocities_[i] =
+            feedback_dt > std::numeric_limits<double>::epsilon()
+              ? (hw_positions_[i] - previous_positions_[i]) / feedback_dt
+              : 0.0;
+        }
+      }
+      else
+      {
+        hw_velocities_.fill(0.0);
+      }
+
+      last_state_feedback_timestamp_ = feedback_timestamp_;
+      last_state_feedback_sequence_ = feedback_sequence_;
     }
   }
   else
   {
+    previous_positions_ = hw_positions_;
     hw_positions_ = hw_commands_;
     hw_efforts_.fill(0.0);
-  }
-
-  const double dt = period.seconds();
-  for (std::size_t i = 0; i < kJointCount; ++i)
-  {
-    hw_velocities_[i] = dt > std::numeric_limits<double>::epsilon()
-                          ? (hw_positions_[i] - previous_positions_[i]) / dt
-                          : 0.0;
+    const double dt = period.seconds();
+    for (std::size_t i = 0; i < kJointCount; ++i)
+    {
+      hw_velocities_[i] = dt > std::numeric_limits<double>::epsilon()
+                            ? (hw_positions_[i] - previous_positions_[i]) / dt
+                            : 0.0;
+    }
   }
 
   return hardware_interface::return_type::OK;
@@ -292,15 +308,32 @@ hardware_interface::return_type XHand1RS485Hardware::write(
     return hardware_interface::return_type::ERROR;
   }
 
+  std::array<double, kJointCount> latest_feedback_positions{};
+  std::chrono::steady_clock::time_point latest_feedback_timestamp{};
+  bool feedback_valid = false;
+  if (read_feedback_)
+  {
+    std::lock_guard<std::mutex> feedback_lock(feedback_mutex_);
+    feedback_valid = feedback_positions_valid_;
+    latest_feedback_positions = feedback_positions_;
+    latest_feedback_timestamp = feedback_timestamp_;
+  }
+  const auto now = std::chrono::steady_clock::now();
+  const bool feedback_fresh = feedback_valid &&
+    now - latest_feedback_timestamp <= kFeedbackFreshnessTimeout;
+
   {
     std::lock_guard<std::mutex> lock(command_mutex_);
-    if (read_feedback_ && require_initial_feedback_ && !feedback_positions_valid_)
+    if (read_feedback_ && require_initial_feedback_ && !feedback_fresh)
     {
       RCLCPP_WARN_THROTTLE(
         rclcpp::get_logger(kLoggerName),
         *get_node()->get_clock(),
         1000,
-        "Suppressing XHAND1 position command until initial feedback is available");
+        "Suppressing XHAND1 position command: feedback is unavailable or older than 200 ms");
+      pending_command_valid_ = false;
+      pending_command_dirty_ = true;
+      command_cv_.notify_one();
       return hardware_interface::return_type::OK;
     }
 
@@ -316,17 +349,22 @@ hardware_interface::return_type XHand1RS485Hardware::write(
         std::lround(static_cast<double>(torque_limit_) * hw_effort_scales_[i]));
     }
 
-    const auto commands = compute_limited_command_positions(target_positions, period.seconds());
-    if (command_sent_ && !command_changed(commands, torque_limits))
-    {
-      return hardware_interface::return_type::OK;
-    }
+    const double interpolation_period = last_write_timestamp_valid_
+      ? std::chrono::duration<double>(now - last_write_timestamp_).count()
+      : period.seconds();
+    const auto& interpolation_origin =
+      feedback_valid ? latest_feedback_positions : hw_positions_;
+    const auto commands = compute_limited_command_positions(
+      target_positions, interpolation_origin, interpolation_period);
 
     pending_command_positions_ = commands;
     pending_command_torque_limits_ = torque_limits;
     pending_command_valid_ = true;
     pending_command_dirty_ = true;
+    last_write_timestamp_ = now;
+    last_write_timestamp_valid_ = true;
   }
+  command_cv_.notify_one();
 
   return hardware_interface::return_type::OK;
 }
@@ -609,6 +647,7 @@ void XHand1RS485Hardware::start_background_thread()
 void XHand1RS485Hardware::stop_background_thread()
 {
   background_running_.store(false);
+  command_cv_.notify_all();
   if (background_thread_.joinable())
   {
     background_thread_.join();
@@ -619,16 +658,30 @@ void XHand1RS485Hardware::background_loop()
 {
   while (background_running_.load())
   {
-    const auto loop_start = std::chrono::steady_clock::now();
-
-    if (read_feedback_ && require_initial_feedback_ && !feedback_positions_valid_)
+    bool feedback_valid = false;
+    std::chrono::steady_clock::time_point feedback_timestamp{};
+    {
+      std::lock_guard<std::mutex> feedback_lock(feedback_mutex_);
+      feedback_valid = feedback_positions_valid_;
+      feedback_timestamp = feedback_timestamp_;
+    }
+    const bool feedback_fresh = feedback_valid &&
+      std::chrono::steady_clock::now() - feedback_timestamp <=
+        kFeedbackFreshnessTimeout;
+    if (read_feedback_ && require_initial_feedback_ && !feedback_fresh)
     {
       if (probe_initial_feedback())
       {
         initialize_state_from_feedback();
         RCLCPP_INFO(
           rclcpp::get_logger(kLoggerName),
-          "Initialized XHAND1 joint state from delayed startup feedback; holding current hand position");
+          "Initialized XHAND1 joint state from fresh feedback; holding current hand position");
+      }
+      else
+      {
+        std::lock_guard<std::mutex> command_lock(command_mutex_);
+        pending_command_valid_ = false;
+        pending_command_dirty_ = false;
       }
     }
 
@@ -636,12 +689,22 @@ void XHand1RS485Hardware::background_loop()
     std::array<uint16_t, kJointCount> torque_limits{};
     bool should_send = false;
     {
-      std::lock_guard<std::mutex> lock(command_mutex_);
-      if (pending_command_valid_)
+      std::unique_lock<std::mutex> lock(command_mutex_);
+      command_cv_.wait(lock, [this]() {
+        return !background_running_.load() || pending_command_dirty_;
+      });
+      if (!background_running_.load())
       {
-        commands = pending_command_positions_;
-        torque_limits = pending_command_torque_limits_;
-        should_send = true;
+        break;
+      }
+      if (pending_command_dirty_)
+      {
+        if (pending_command_valid_)
+        {
+          commands = pending_command_positions_;
+          torque_limits = pending_command_torque_limits_;
+          should_send = true;
+        }
         pending_command_dirty_ = false;
       }
     }
@@ -674,31 +737,23 @@ void XHand1RS485Hardware::background_loop()
       }
     }
 
-    const auto elapsed = std::chrono::steady_clock::now() - loop_start;
-    const auto target_period = std::chrono::duration<double>(
-      1.0 / static_cast<double>(read_write_rate_hz_));
-    if (elapsed < target_period)
-    {
-      std::this_thread::sleep_for(target_period - elapsed);
-    }
   }
 }
 
 std::array<double, XHand1RS485Hardware::kJointCount>
 XHand1RS485Hardware::compute_limited_command_positions(
   const std::array<double, kJointCount>& target_positions,
-  double period_seconds) const
+  const std::array<double, kJointCount>& feedback_positions,
+  double elapsed_since_last_write_seconds) const
 {
   std::array<double, kJointCount> limited_positions{};
-  const double communication_period_seconds =
-    1.0 / static_cast<double>(read_write_rate_hz_);
   const double interpolation_period_seconds =
-    std::max(communication_period_seconds, period_seconds);
+    std::max(0.0, elapsed_since_last_write_seconds);
 
   for (std::size_t i = 0; i < kJointCount; ++i)
   {
     const double target = std::clamp(target_positions[i], lower_limits_[i], upper_limits_[i]);
-    const double current = command_sent_ ? last_command_positions_[i] : hw_positions_[i];
+    const double current = feedback_positions[i];
     const double velocity_scale = std::clamp(hw_velocity_scales_[i], 0.0, 1.0);
     const double max_step =
       kMaxVelocityRadPerSec * velocity_scale * interpolation_period_seconds;
@@ -774,6 +829,7 @@ void XHand1RS485Hardware::initialize_state_from_feedback()
   command_sent_ = false;
   pending_command_valid_ = false;
   pending_command_dirty_ = false;
+  last_write_timestamp_valid_ = false;
 }
 
 bool XHand1RS485Hardware::exchange_realtime_frame(
@@ -852,6 +908,8 @@ bool XHand1RS485Hardware::exchange_realtime_frame(
     std::lock_guard<std::mutex> lock(feedback_mutex_);
     feedback_positions_ = positions;
     feedback_efforts_ = efforts;
+    feedback_timestamp_ = std::chrono::steady_clock::now();
+    ++feedback_sequence_;
     feedback_positions_valid_ = true;
   }
 
@@ -1083,24 +1141,6 @@ bool XHand1RS485Hardware::parse_realtime_response(
   }
 
   return true;
-}
-
-bool XHand1RS485Hardware::command_changed(
-  const std::array<double, kJointCount>& commands,
-  const std::array<uint16_t, kJointCount>& torque_limits) const
-{
-  for (std::size_t i = 0; i < kJointCount; ++i)
-  {
-    if (std::abs(commands[i] - last_command_positions_[i]) > command_deadband_rad_)
-    {
-      return true;
-    }
-    if (torque_limits[i] != last_command_torque_limits_[i])
-    {
-      return true;
-    }
-  }
-  return false;
 }
 
 void XHand1RS485Hardware::append_u16_le(std::vector<uint8_t>& frame, uint16_t value)

@@ -2,6 +2,8 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -82,7 +84,8 @@ private:
   void background_loop();
   std::array<double, kJointCount> compute_limited_command_positions(
     const std::array<double, kJointCount>& target_positions,
-    double period_seconds) const;
+    const std::array<double, kJointCount>& feedback_positions,
+    double elapsed_since_last_write_seconds) const;
   bool send_realtime_command(
     const std::array<double, kJointCount>& commands,
     const std::array<uint16_t, kJointCount>& torque_limits);
@@ -98,10 +101,6 @@ private:
     const std::vector<uint8_t>& frame,
     std::array<double, kJointCount>& positions,
     std::array<double, kJointCount>& efforts) const;
-  bool command_changed(
-    const std::array<double, kJointCount>& commands,
-    const std::array<uint16_t, kJointCount>& torque_limits) const;
-
   static void append_u16_le(std::vector<uint8_t>& frame, uint16_t value);
   static void append_i16_le(std::vector<uint8_t>& frame, int16_t value);
   static void append_float_le(std::vector<uint8_t>& frame, float value);
@@ -128,7 +127,6 @@ private:
   int16_t kd_ = 0;
   uint16_t torque_limit_ = kMaxTorqueLimit;
   uint16_t control_mode_ = kPositionMode;
-  unsigned int read_write_rate_hz_ = 50;
   double tool_torque_scale_ = 1.0;
   double tool_velocity_scale_ = 1.0;
   int serial_fd_ = -1;
@@ -137,6 +135,7 @@ private:
   bool pending_command_dirty_ = false;
   std::atomic_bool background_running_{false};
   std::thread background_thread_;
+  std::condition_variable command_cv_;
   std::mutex command_mutex_;
   std::mutex feedback_mutex_;
   std::mutex error_mutex_;
@@ -160,6 +159,12 @@ private:
   std::array<uint16_t, kJointCount> pending_command_torque_limits_{};
   std::array<double, kJointCount> feedback_positions_{};
   std::array<double, kJointCount> feedback_efforts_{};
+  std::chrono::steady_clock::time_point feedback_timestamp_{};
+  std::chrono::steady_clock::time_point last_state_feedback_timestamp_{};
+  std::chrono::steady_clock::time_point last_write_timestamp_{};
+  uint64_t feedback_sequence_ = 0;
+  uint64_t last_state_feedback_sequence_ = 0;
+  bool last_write_timestamp_valid_ = false;
   bool feedback_positions_valid_ = false;
 };
 
