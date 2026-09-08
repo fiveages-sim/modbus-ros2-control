@@ -51,6 +51,8 @@ add_library(
         src/hands/xhand1/xhand1_rs485_hardware.cpp
         src/sensors/kwr75_serial_client.cpp
         src/sensors/kwr75_force_torque_sensor.cpp
+        src/sensors/weili_serial_client.cpp
+        src/sensors/weili_force_torque_sensor.cpp
 )
 
 target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)

@@ -4,7 +4,7 @@
 
 ## 1. 支持的末端执行器
 
-本包注册 **7 个** `hardware_interface` 插件（见 `modbus_ros2_control.xml`）：
+本包注册 **8 个** `hardware_interface` 插件（见 `modbus_ros2_control.xml`）：
 
 | 插件 | 产品 | 识别 / 配置方式 |
 |------|------|-----------------|
@@ -18,6 +18,7 @@
 | **`XHand1RS485Hardware`** | **XHand1** | URDF 12 关节；专用 RS485（默认 3 Mbps） |
 | **`TheoHandModbusHardware`** | TheoHand **STD16A** | URDF 16 关节；标准 Modbus RTU（默认 115200 8N1） |
 | **`Kwr75ForceTorqueSensor`** | **KWR75** 六轴力传感器 | `type="sensor"`；专用 RS485（默认 2.5 Mbps） |
+| **`WeiliForceTorqueSensor`** | **Weili** 六轴力传感器（通用协议 1） | `type="sensor"`；Modbus RTU（默认 115200 8N1，从站 9，250/500/1000 Hz） |
 
 **Inspire 请使用 `InspireHandHardware`**
 
@@ -42,7 +43,8 @@ modbus_ros2_control/
 │   ├── theo/                          # TheoHandModbusHardware
 │   └── xhand1/                        # XHand1RS485Hardware
 ├── sensors/
-│   └── kwr75_force_torque_sensor.cpp  # Kwr75ForceTorqueSensor
+│   ├── kwr75_force_torque_sensor.{h,cpp}  # Kwr75ForceTorqueSensor
+│   └── weili_force_torque_sensor.{h,cpp}  # WeiliForceTorqueSensor（含 weili_serial_client）
 ├── modbus_hardware.cpp                # 夹爪插件入口
 └── modbus_ros2_control.xml            # 插件清单
 ```
@@ -140,6 +142,39 @@ modbus_ros2_control/
 
 协议与坤维官方 SDK（`kwcapture.h`，`linkMode=0`、`decodeMode=0`、`kwStartCapture`）一致：激活时发送一次 `0x48 0xAA 0x0D 0x0A` 启动 1kHz 连续流，之后只读串口缓冲中的最新 28 字节帧，不再每周期 flush/重发命令。
 
+### 3.7 Weili 六轴力传感器（`WeiliForceTorqueSensor`）
+
+Modbus RTU（通用协议 1）六轴力传感器，机器人侧作为主站通过 USB-RS485 与传感器通信。
+
+```xml
+<ros2_control name="weili_ft_sensor" type="sensor">
+  <hardware>
+    <plugin>modbus_ros2_control/WeiliForceTorqueSensor</plugin>
+    <param name="serial_port">/dev/ttyUSB2</param>
+    <!-- 波特率默认 115200（USB-RS485 默认值，无需写；机器人内部 485 总线可用 921600） -->
+    <param name="slave_id">9</param>
+    <param name="sample_rate">1000</param>   <!-- 250 / 500 / 1000 Hz -->
+    <param name="zero_on_activate">false</param>
+    <param name="wrench_topic">/external_wrench</param>
+  </hardware>
+  <sensor name="weili_ft">
+    <state_interface name="force.x"/>
+    <state_interface name="force.y"/>
+    <state_interface name="force.z"/>
+    <state_interface name="torque.x"/>
+    <state_interface name="torque.y"/>
+    <state_interface name="torque.z"/>
+  </sensor>
+</ros2_control>
+```
+
+命令帧为 Modbus RTU `FC 0x10` 写寄存器 `0x019A`（从站 9）：`0x0301`=250 Hz、`0x0302`=500 Hz、`0x0303`=1000 Hz、`0x0300`=停止、`0x8051`=回零（依据文档 CRC 反推）。
+回传力值帧为 `0x20 0x4E` + 6×float32 + CRC16/Modbus（共 28 字节，默认），帧头不符 / CRC 失败自动丢包；回零状态帧与错误状态帧（功能位 `0x00`/`0x01`）由低层客户端识别。
+
+- 采样保持：控制周期高于回传频率时保持最近值；超过 `data_timeout_ms`（默认 200 ms）无新帧视为通讯中断，输出归 0。
+- 若真机回传帧含“功能位”字节（29 字节帧），通过 `frame_length=29` + `data_offset=3` 覆盖。
+- 波特率默认 115200 即可（485-USB 默认值），如接机器人内部 485（921600）再显式配 `baudrate=921600`。
+
 ## 4. 硬件参数
 
 | 插件 | 参数 | 默认 | 说明 |
@@ -177,6 +212,17 @@ modbus_ros2_control/
 | | `response_timeout_ms` | `50` | 单次读流超时（ms） |
 | | `startup_delay_ms` | `50` | 发送启动命令后等待首帧（ms） |
 | | `warmup_attempts` | `20` | 激活时握手重试次数 |
+| **WeiliForceTorqueSensor** | `serial_port` | `/dev/ttyUSB0` | USB-RS485 转换器 |
+| | `baudrate` | `115200` | 8N1；默认即可（485-USB 默认波特率），接机器人内部 485 用 921600 |
+| | `slave_id` | `9` | Modbus 从站号 |
+| | `sample_rate` | `1000` | 回传频率：250 / 500 / 1000 Hz |
+| | `rate_register` | `0` | 直接指定启动寄存器值（如 `0x0301`）；非 0 时优先生效 |
+| | `frame_length` / `data_offset` | `28` / `2` | 力值帧长与力值偏移；含功能位的 29 字节帧用 `29`/`3` |
+| | `zero_on_activate` | `false` | 激活时自动回零（发送回零并等待结果，500 ms 超时） |
+| | `zero_timeout_ms` | `500` | 回零结果超时（协议要求 500 ms） |
+| | `data_timeout_ms` | `200` | 数据中断看门狗；超过则输出归 0 |
+| | `force_scale` / `torque_scale` | `1.0` / `1.0` | 可选标定系数（默认已为 N / N·m，无需换算） |
+| | `wrench_topic` | `` | 非空时发布 `WrenchStamped` |
 
 ## 5. 位置单位
 

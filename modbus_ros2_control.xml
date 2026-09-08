@@ -66,4 +66,14 @@
             Poll command 0x49 0xAA 0x0D 0x0A, response 28-byte float frame.
         </description>
     </class>
+    <class name="modbus_ros2_control/WeiliForceTorqueSensor"
+           type="modbus_ros2_control::WeiliForceTorqueSensor"
+           base_class_type="hardware_interface::SensorInterface">
+        <description>
+            Weili six-axis force/torque sensor over Modbus RTU (USB-RS485 adapter), 通用协议 1.
+            Defaults: /dev/ttyUSB0, baudrate 115200, 8N1, slave 9.
+            FC 0x10 write register 0x019A (250/500/1000 Hz / stop / zero),
+            data frames header 0x20 0x4E + 6xfloat32 + CRC16/Modbus.
+        </description>
+    </class>
 </library>
