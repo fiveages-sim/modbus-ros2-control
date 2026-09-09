@@ -27,7 +27,8 @@ public:
         int slave_id,
         char parity = 'N',
         int data_bits = 8,
-        int stop_bits = 1
+        int stop_bits = 1,
+        bool configure_low_latency = false
     );
 
     /**
@@ -126,12 +127,15 @@ public:
     int getSlaveId() const { return slave_id_; }
 
 private:
+    void configureFtdiLatencyTimer();
+
     std::string serial_port_;
     uint32_t baudrate_;
     int slave_id_;
     char parity_;
     int data_bits_;
     int stop_bits_;
+    bool configure_low_latency_;
     int response_timeout_ms_ = 500; // 响应超时(ms)
     int byte_timeout_ms_ = 100;     // 字节间隔超时(ms)
     
@@ -141,4 +145,3 @@ private:
 };
 
 } // namespace modbus_ros2_control
-

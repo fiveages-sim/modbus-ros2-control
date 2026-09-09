@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <atomic>
 
 namespace modbus_ros2_control
 {
@@ -101,6 +102,13 @@ namespace modbus_ros2_control
         std::string hand_side_;      // 手部：left 或 right
         std::string serial_port_;    // 串口路径
         uint8_t modbus_slave_id_;    // Modbus 从站地址（0x27=右手, 0x28=左手）
+        int response_timeout_ms_{20};
+        int byte_timeout_ms_{5};
+        std::string tool_torque_parameter_name_;
+        std::string tool_velocity_parameter_name_;
+        std::atomic<double> tool_torque_{1.0};
+        std::atomic<double> tool_velocity_{1.0};
+        rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_;
         
         // 保存硬件参数（用于传递给hand_->initialize）
         // 注意：关节限位从ModbusConfig中读取，不再需要robot_description
@@ -120,4 +128,3 @@ namespace modbus_ros2_control
         bool createHand(const std::vector<hardware_interface::ComponentInfo>& joints);
     };
 } // namespace modbus_ros2_control
-

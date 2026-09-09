@@ -42,6 +42,8 @@ namespace modbus_ros2_control
     {
         static constexpr size_t JOINT_COUNT = 7;
         static constexpr uint16_t JOINT_POSITION_REG_START = 0;
+        static constexpr uint16_t TORQUE_REG_START = 7;
+        static constexpr uint16_t SPEED_REG_START = 14;
         static constexpr const char* PRODUCT_NAME = "O7";
         
         /**
@@ -71,6 +73,8 @@ namespace modbus_ros2_control
     {
         static constexpr size_t JOINT_COUNT = 6;
         static constexpr uint16_t JOINT_POSITION_REG_START = 0;  // Input Registers 0-5 for position
+        static constexpr uint16_t TORQUE_REG_START = 6;
+        static constexpr uint16_t SPEED_REG_START = 12;
         static constexpr const char* PRODUCT_NAME = "O6";
         
         /**
@@ -106,6 +110,8 @@ namespace modbus_ros2_control
     {
         static constexpr size_t JOINT_COUNT = 6;
         static constexpr uint16_t JOINT_POSITION_REG_START = 0;
+        static constexpr uint16_t TORQUE_REG_START = 6;
+        static constexpr uint16_t SPEED_REG_START = 12;
         static constexpr const char* PRODUCT_NAME = "L6";
         
         /**
@@ -172,6 +178,8 @@ namespace modbus_ros2_control
          */
         bool writeCommand() override;
 
+        void setToolRatios(double torque_ratio, double velocity_ratio) override;
+
         /**
          * @brief Shutdown hand connection
          */
@@ -188,8 +196,9 @@ namespace modbus_ros2_control
         std::array<double, JOINT_COUNT> joint_lower_limits_ = {};
         std::array<double, JOINT_COUNT> joint_upper_limits_ = {};
         
-        // Speed limiting configuration
-        double max_speed_ratio_ = 1.0;  // Maximum speed ratio (0.0-1.0), limits the maximum speed portion of each joint
+        std::atomic<double> torque_ratio_{1.0};
+        std::atomic<double> velocity_ratio_{1.0};
+        std::atomic<bool> dynamics_write_pending_{true};
 
         // Position conversion: ROS2 Control radians <-> Modbus raw value (0x00-0xFF)
         uint8_t radiansToRaw(size_t joint_index, double radians) const;

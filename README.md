@@ -152,7 +152,10 @@ modbus_ros2_control/
 | **DexterousHandHardware** | `serial_port` | — | 必需 |
 | | `hand_side` | `right` | `left` / `right`；左 `0x28`，右 `0x27` |
 | | `hand_type` | `simple_dexterous_hand` | 区分 O6 / L6；含 `INSPIRE` / `RH56` 会拒绝 |
-| | `max_speed_ratio` | — | 可选，如 `1.0` |
+| | `left_tool_torque` / `right_tool_torque` | `1.0` | 对应侧 LinkerHand 设备力矩比例，范围 `[0, 1]` |
+| | `left_tool_velocity` / `right_tool_velocity` | `1.0` | 对应侧 LinkerHand 设备速度比例，范围 `[0, 1]` |
+| | `response_timeout_ms` | `20` | Modbus 响应超时 |
+| | `byte_timeout_ms` | `5` | Modbus 字节间超时 |
 | | 串口格式 | 固定 | 115200 8N1 |
 | **InspireHandHardware** | `serial_port` | `/dev/ttyUSB0` | |
 | | `hand_side` | `left` | `slave_id:=auto` 时左 `2`、右 `1` |

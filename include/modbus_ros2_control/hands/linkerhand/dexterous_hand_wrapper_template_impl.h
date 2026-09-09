@@ -415,103 +415,63 @@ namespace modbus_ros2_control
             }
         }
 
-        // Read speed limiting configuration
-        auto speed_it = params.find("max_speed_ratio");
-        if (speed_it != params.end())
-        {
-            try
-            {
-                max_speed_ratio_ = std::stod(speed_it->second);
-                // Clamp to valid range [0.0, 1.0]
-                max_speed_ratio_ = std::max(0.0, std::min(1.0, max_speed_ratio_));
-                RCLCPP_INFO(
-                    logger_,
-                    "Speed limiting enabled: max_speed_ratio = %.2f (%.0f%% of maximum speed)",
-                    max_speed_ratio_,
-                    max_speed_ratio_ * 100.0
-                );
+        const auto parse_ratio = [&](const char* name, double& destination) -> bool {
+            const auto it = params.find(name);
+            if (it == params.end()) return true;
+            try {
+                const double value = std::stod(it->second);
+                if (!std::isfinite(value) || value < 0.0 || value > 1.0) {
+                    RCLCPP_ERROR(logger_, "%s must be in [0, 1], got '%s'", name, it->second.c_str());
+                    return false;
+                }
+                destination = value;
+                return true;
+            } catch (const std::exception& e) {
+                RCLCPP_ERROR(logger_, "Invalid %s '%s': %s", name, it->second.c_str(), e.what());
+                return false;
             }
-            catch (const std::exception& e)
-            {
-                RCLCPP_WARN(
-                    logger_,
-                    "Failed to parse max_speed_ratio parameter '%s': %s. Using default 1.0 (no speed limiting)",
-                    speed_it->second.c_str(),
-                    e.what()
-                );
-                max_speed_ratio_ = 1.0;
-            }
-        }
-        else
-        {
-            RCLCPP_INFO(logger_, "No max_speed_ratio parameter found, using default 1.0 (no speed limiting)");
-        }
+        };
+        double torque_ratio = torque_ratio_.load();
+        double velocity_ratio = velocity_ratio_.load();
+        const std::string torque_parameter = modbus_slave_id_ == ModbusConfig::DexterousHand::LEFT_HAND_SLAVE_ID ? "left_tool_torque" : "right_tool_torque";
+        const std::string velocity_parameter = modbus_slave_id_ == ModbusConfig::DexterousHand::LEFT_HAND_SLAVE_ID ? "left_tool_velocity" : "right_tool_velocity";
+        if (!parse_ratio(torque_parameter.c_str(), torque_ratio) ||
+            !parse_ratio(velocity_parameter.c_str(), velocity_ratio)) return false;
+        setToolRatios(torque_ratio, velocity_ratio);
+        RCLCPP_INFO(logger_, "Device dynamics: %s=%.3f, %s=%.3f",
+                    torque_parameter.c_str(), torque_ratio,
+                    velocity_parameter.c_str(), velocity_ratio);
 
         // Read initial position and synchronize command registers
         RCLCPP_INFO(logger_, "Reading initial hand position...");
+        initialized_ = true;
         if (readStatus())
         {
+            publishFeedbackToStateInterfaces();
             // Set command position to current position to avoid jumps
             for (size_t i = 0; i < JOINT_COUNT && i < position_commands_.size(); ++i)
             {
                 position_commands_[i] = positions_[i];
             }
             
-            // Prepare for initial write with speed limiting support
-            const double time_step = 0.01;
             for (size_t i = 0; i < JOINT_COUNT && i < position_commands_.size(); ++i)
             {
-                // Set last_commands_ to trigger write while respecting speed limits
-                double joint_range = joint_upper_limits_[i] - joint_lower_limits_[i];
-                if (joint_range > 0.0 && max_speed_ratio_ < 1.0)
-                {
-                    double max_change = joint_range * max_speed_ratio_ * time_step;
-                    last_commands_[i] = positions_[i] - max_change * 0.5;
-                }
-                else
-                {
-                    last_commands_[i] = positions_[i] - 0.0001;
-                }
+                last_commands_[i] = positions_[i];
             }
-            
-            // Write initial command to synchronize device registers
+            publishCommands();
+            dynamics_write_pending_ = true;
             RCLCPP_INFO(logger_, "Writing initial command to device...");
-            writeCommand();  // Ignore return value, continue even if write fails
-            
-            // Sync last_commands_ with position_commands_ for future writes
-            for (size_t i = 0; i < JOINT_COUNT && i < position_commands_.size(); ++i)
-            {
-                last_commands_[i] = position_commands_[i];
-            }
-            
+            if (!writeCommand()) { initialized_ = false; return false; }
             initial_position_read_ = true;
             RCLCPP_INFO(logger_, "Initial position synchronized successfully");
             logInitialized();
         }
         else
         {
-            // Use default middle positions if read fails
-            RCLCPP_WARN(logger_, "Failed to read initial position, using default middle positions");
-            for (size_t i = 0; i < JOINT_COUNT && i < positions_.size(); ++i)
-            {
-                double middle = (joint_lower_limits_[i] + joint_upper_limits_[i]) / 2.0;
-                positions_[i] = middle;
-                position_commands_[i] = middle;
-                last_commands_[i] = middle - 0.0001;  // Trigger write
-            }
-            
-            writeCommand();  // Write default positions
-            
-            // Sync last_commands_
-            for (size_t i = 0; i < JOINT_COUNT && i < position_commands_.size(); ++i)
-            {
-                last_commands_[i] = position_commands_[i];
-            }
-            
-            initial_position_read_ = true;
+            RCLCPP_ERROR(logger_, "Failed to read initial position; refusing to activate the hand");
+            initialized_ = false;
+            return false;
         }
-
-        initialized_ = true;
         return true;
     }
 
@@ -545,13 +505,17 @@ namespace modbus_ros2_control
             
             // Successfully read, convert raw values (0-255) to radians
             uint8_t raw_values[JOINT_COUNT];
+            std::array<double, JOINT_COUNT> converted_positions{};
             for (size_t i = 0; i < JOINT_COUNT; ++i)
             {
                 int modbus_idx = modbus_indices[i];
                 raw_values[i] = static_cast<uint8_t>(joint_data[modbus_idx] & 0xFF);
-                positions_[i] = rawToRadians(i, raw_values[i]);
-                velocities_[i] = 0.0;
-                efforts_[i] = 0.0;
+                converted_positions[i] = rawToRadians(i, raw_values[i]);
+            }
+            {
+                std::lock_guard<std::mutex> feedback_lock(feedback_mutex_);
+                std::copy_n(converted_positions.begin(), JOINT_COUNT,
+                            communication_positions_.begin());
             }
 
             logStatus(raw_values);
@@ -585,58 +549,21 @@ namespace modbus_ros2_control
             return false;
         }
 
-        // Check if command values are valid (not NaN)
+        std::array<double, JOINT_COUNT> commands;
+        uint64_t sequence = 0;
+        {
+            std::lock_guard<std::mutex> lock(command_mutex_);
+            std::copy_n(communication_commands_.begin(), JOINT_COUNT, commands.begin());
+            sequence = command_sequence_;
+        }
+
         for (size_t i = 0; i < JOINT_COUNT; ++i)
         {
-            if (std::isnan(position_commands_[i]))
+            if (!std::isfinite(commands[i]))
             {
-                RCLCPP_WARN_THROTTLE(
-                    logger_,
-                    *clock_,
-                    2000,
-                    "Command value for joint %zu is NaN, skipping write",
-                    i
-                );
+                RCLCPP_WARN_THROTTLE(logger_, *clock_, 2000,
+                    "Command value for joint %zu is not finite, skipping write", i);
                 return false;
-            }
-        }
-
-        // Apply speed limiting if enabled (max_speed_ratio < 1.0)
-        // Use fixed time step (0.01s = 10ms, corresponding to 100Hz control loop)
-        // This is a reasonable default for most control loops
-        const double time_step = 0.01;  // 10ms time step
-
-        // Apply speed limiting to position commands
-        // Note: position_commands_ is std::array<double, 7> in base class, but we only use first JOINT_COUNT elements
-        // Create a local array with correct size for this hand type (O7=7, O6/L6=6)
-        std::array<double, JOINT_COUNT> limited_commands;
-        for (size_t i = 0; i < JOINT_COUNT; ++i)
-        {
-            limited_commands[i] = position_commands_[i];
-        }
-
-        if (max_speed_ratio_ < 1.0)
-        {
-            for (size_t i = 0; i < JOINT_COUNT; ++i)
-            {
-                double desired_change = position_commands_[i] - last_commands_[i];
-                
-                // Calculate maximum allowed change based on joint range and speed ratio
-                // Use joint range to estimate reasonable maximum speed
-                double joint_range = joint_upper_limits_[i] - joint_lower_limits_[i];
-                if (joint_range > 0.0)
-                {
-                    // Maximum speed: assume full range can be traversed in 1 second at max speed
-                    // Then apply speed ratio to limit it
-                    double max_speed = joint_range * max_speed_ratio_;  // rad/s (scaled by ratio)
-                    double max_change = max_speed * time_step;  // Maximum change per time step
-                    
-                    // Limit the change
-                    if (std::abs(desired_change) > max_change)
-                    {
-                        limited_commands[i] = last_commands_[i] + std::copysign(max_change, desired_change);
-                    }
-                }
             }
         }
 
@@ -644,14 +571,14 @@ namespace modbus_ros2_control
         bool has_changes = false;
         for (size_t i = 0; i < JOINT_COUNT; ++i)
         {
-            if (std::abs(limited_commands[i] - last_commands_[i]) > 0.001)
+            if (std::abs(commands[i] - last_commands_[i]) > 0.001)
             {
                 has_changes = true;
                 break;
             }
         }
 
-        if (!has_changes)
+        if (!has_changes && !dynamics_write_pending_)
         {
             return false; // No changes, no need to send
         }
@@ -675,24 +602,41 @@ namespace modbus_ros2_control
         }
         
         // Convert radians commands to raw values (0-255), arranged in Modbus register order
-        // Use speed-limited commands instead of original position_commands_
+        // Arrange the latest controller command snapshot in Modbus register order.
         uint16_t raw_positions[JOINT_COUNT] = {0};
         for (size_t i = 0; i < JOINT_COUNT; ++i)
         {
             int modbus_idx = modbus_indices[i];
-            raw_positions[modbus_idx] = static_cast<uint16_t>(radiansToRaw(i, limited_commands[i]));
+            raw_positions[modbus_idx] = static_cast<uint16_t>(radiansToRaw(i, commands[i]));
         }
 
-        // Use Modbus function code 16 to write multiple holding registers
-        int rc = communicator_->writeRegisters(Traits::JOINT_POSITION_REG_START, JOINT_COUNT, raw_positions);
+        int rc = -1;
+        if (dynamics_write_pending_)
+        {
+            std::array<uint16_t, JOINT_COUNT * 3> block{};
+            std::copy_n(raw_positions, JOINT_COUNT, block.begin());
+            const uint16_t torque = static_cast<uint16_t>(std::lround(torque_ratio_.load() * 255.0));
+            const uint16_t velocity = static_cast<uint16_t>(std::lround(velocity_ratio_.load() * 255.0));
+            std::fill_n(block.begin() + Traits::TORQUE_REG_START, JOINT_COUNT, torque);
+            std::fill_n(block.begin() + Traits::SPEED_REG_START, JOINT_COUNT, velocity);
+            rc = communicator_->writeRegisters(Traits::JOINT_POSITION_REG_START,
+                                                static_cast<int>(block.size()), block.data());
+            if (rc == static_cast<int>(block.size())) dynamics_write_pending_ = false;
+        }
+        else
+        {
+            rc = communicator_->writeRegisters(Traits::JOINT_POSITION_REG_START, JOINT_COUNT, raw_positions);
+        }
         
-        if (rc == static_cast<int>(JOINT_COUNT))
+        if ((!dynamics_write_pending_ && rc == static_cast<int>(JOINT_COUNT * 3)) ||
+            rc == static_cast<int>(JOINT_COUNT))
         {
             // Update last_commands_ with speed-limited commands
             for (size_t i = 0; i < JOINT_COUNT; ++i)
             {
-                last_commands_[i] = limited_commands[i];
+                last_commands_[i] = commands[i];
             }
+            consumed_command_sequence_ = sequence;
             
             logCommand(raw_positions);
             return true;
@@ -711,6 +655,15 @@ namespace modbus_ros2_control
             );
             return false;
         }
+    }
+
+    template<DexterousHandProduct Product>
+    void DexterousHandWrapperTemplate<Product>::setToolRatios(
+        double torque_ratio, double velocity_ratio)
+    {
+        torque_ratio_.store(std::clamp(torque_ratio, 0.0, 1.0));
+        velocity_ratio_.store(std::clamp(velocity_ratio, 0.0, 1.0));
+        dynamics_write_pending_.store(true);
     }
 
     template<DexterousHandProduct Product>
@@ -817,7 +770,7 @@ namespace modbus_ros2_control
                 "%-18s | %10d | %18.4f | [%.4f, %.4f]",
                 joint_names_[i].c_str(),
                 static_cast<int>(raw_values[i]),
-                positions_[i],
+                communication_positions_[i],
                 joint_lower_limits_[i],
                 joint_upper_limits_[i]
             );
@@ -830,7 +783,7 @@ namespace modbus_ros2_control
         
         for (size_t i = 0; i < JOINT_COUNT; ++i)
         {
-            pos_ss << std::fixed << std::setprecision(4) << positions_[i];
+            pos_ss << std::fixed << std::setprecision(4) << communication_positions_[i];
             raw_ss << std::setw(3) << static_cast<int>(raw_values[i]);
             if (i < JOINT_COUNT - 1)
             {
@@ -875,7 +828,7 @@ namespace modbus_ros2_control
                 1000,
                 "%-18s | %14.4f | %10d | [%.4f, %.4f]",
                 joint_names_[i].c_str(),
-                position_commands_[i],
+                last_commands_[i],
                 static_cast<int>(raw_positions[i]),
                 joint_lower_limits_[i],
                 joint_upper_limits_[i]
@@ -889,7 +842,7 @@ namespace modbus_ros2_control
         
         for (size_t i = 0; i < JOINT_COUNT; ++i)
         {
-            cmd_ss << std::fixed << std::setprecision(4) << position_commands_[i];
+            cmd_ss << std::fixed << std::setprecision(4) << last_commands_[i];
             raw_ss << std::setw(3) << static_cast<int>(raw_positions[i]);
             if (i < JOINT_COUNT - 1)
             {
