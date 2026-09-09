@@ -306,35 +306,6 @@ namespace modbus_ros2_control
 
         RCLCPP_INFO(get_node()->get_logger(), "✅ Dexterous hand initialized");
 
-        // 再次读取位置并同步命令接口（确保命令接口值与实际位置一致）
-        // 这很重要，因为控制器可能在on_activate时设置了默认命令值
-        RCLCPP_INFO(get_node()->get_logger(), "Synchronizing command interfaces with actual positions...");
-        if (hand_->readStatus())
-        {
-            // 同步命令接口：将命令位置设置为当前实际位置
-            for (size_t i = 0; i < hand_->getJointNames().size(); ++i)
-            {
-                double* cmd_ptr = hand_->getPositionCommandPtr(i);
-                double* pos_ptr = hand_->getPositionPtr(i);
-                if (cmd_ptr && pos_ptr)
-                {
-                    *cmd_ptr = *pos_ptr;
-                    RCLCPP_DEBUG(
-                        get_node()->get_logger(),
-                        "Synchronized joint %s: command = %.4f (from position %.4f)",
-                        hand_->getJointNames()[i].c_str(),
-                        *cmd_ptr,
-                        *pos_ptr
-                    );
-                }
-            }
-            RCLCPP_INFO(get_node()->get_logger(), "✅ Command interfaces synchronized with actual positions");
-        }
-        else
-        {
-            RCLCPP_WARN(get_node()->get_logger(), "Failed to read positions for synchronization");
-        }
-
         // 启动后台读取线程
         hand_->startBackgroundReading();
 

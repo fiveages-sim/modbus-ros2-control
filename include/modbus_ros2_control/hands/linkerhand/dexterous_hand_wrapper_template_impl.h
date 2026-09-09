@@ -8,6 +8,8 @@
 #include <sstream>
 #include <vector>
 #include <string>
+#include <chrono>
+#include <thread>
 
 namespace modbus_ros2_control
 {
@@ -445,7 +447,25 @@ namespace modbus_ros2_control
         // Read initial position and synchronize command registers
         RCLCPP_INFO(logger_, "Reading initial hand position...");
         initialized_ = true;
-        if (readStatus())
+        constexpr int kInitializationAttempts = 5;
+        constexpr auto kRetryDelay = std::chrono::milliseconds(10);
+        bool initial_read_ok = false;
+        for (int attempt = 1; attempt <= kInitializationAttempts; ++attempt)
+        {
+            if (readStatus())
+            {
+                initial_read_ok = true;
+                break;
+            }
+            if (attempt < kInitializationAttempts)
+            {
+                RCLCPP_WARN(logger_, "Initial position read failed (attempt %d/%d); retrying",
+                            attempt, kInitializationAttempts);
+                communicator_->flush();
+                std::this_thread::sleep_for(kRetryDelay);
+            }
+        }
+        if (initial_read_ok)
         {
             publishFeedbackToStateInterfaces();
             // Set command position to current position to avoid jumps
@@ -461,7 +481,23 @@ namespace modbus_ros2_control
             publishCommands();
             dynamics_write_pending_ = true;
             RCLCPP_INFO(logger_, "Writing initial command to device...");
-            if (!writeCommand()) { initialized_ = false; return false; }
+            bool initial_write_ok = false;
+            for (int attempt = 1; attempt <= kInitializationAttempts; ++attempt)
+            {
+                if (writeCommand())
+                {
+                    initial_write_ok = true;
+                    break;
+                }
+                if (attempt < kInitializationAttempts)
+                {
+                    RCLCPP_WARN(logger_, "Initial dynamics write failed (attempt %d/%d); retrying",
+                                attempt, kInitializationAttempts);
+                    communicator_->flush();
+                    std::this_thread::sleep_for(kRetryDelay);
+                }
+            }
+            if (!initial_write_ok) { initialized_ = false; return false; }
             initial_position_read_ = true;
             RCLCPP_INFO(logger_, "Initial position synchronized successfully");
             logInitialized();

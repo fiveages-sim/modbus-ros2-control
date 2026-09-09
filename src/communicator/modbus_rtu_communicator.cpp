@@ -228,6 +228,12 @@ void ModbusRtuCommunicator::setDebug(bool debug) {
     }
 }
 
+void ModbusRtuCommunicator::flush() {
+    if (modbus_ctx_) {
+        modbus_flush(modbus_ctx_);
+    }
+}
+
 std::string ModbusRtuCommunicator::getLastError() const {
     if (!last_error_.empty()) {
         return last_error_;

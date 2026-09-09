@@ -108,6 +108,9 @@ public:
      */
     void setDebug(bool debug);
 
+    /// Discard pending bytes after a failed RTU transaction.
+    void flush();
+
     /**
      * @brief 设置事务超时（需在 connect() 之前调用）
      * @param response_timeout_ms 响应超时（毫秒）
