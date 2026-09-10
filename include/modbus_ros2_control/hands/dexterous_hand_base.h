@@ -79,6 +79,8 @@ namespace modbus_ros2_control
          */
         virtual bool writeCommand() = 0;
 
+        virtual void setToolRatios(double torque_ratio, double velocity_ratio) = 0;
+
         /**
          * @brief 关闭灵巧手连接（纯虚函数，由子类实现）
          */
@@ -105,6 +107,12 @@ namespace modbus_ros2_control
          * @param period 控制循环的周期（Duration）
          */
         void updateBackgroundReadingInterval(const rclcpp::Duration& period);
+
+        /// Copy controller commands into the communication-thread snapshot.
+        void publishCommands();
+
+        /// Copy the latest communication-thread feedback into ROS 2 state storage.
+        void publishFeedbackToStateInterfaces();
 
         // 访问器方法
         bool hasHand() const { return !joint_names_.empty(); }
@@ -178,11 +186,20 @@ namespace modbus_ros2_control
         };
         std::array<double, 7> last_commands_ = {-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0};  // 上一次命令
 
+        // The controller-manager-facing arrays above are never accessed directly by the
+        // communication thread. Whole-array snapshots avoid data races at high CM rates.
+        std::array<double, 7> communication_commands_ = {};
+        std::array<double, 7> communication_positions_ = {};
+        std::mutex command_mutex_;
+        std::mutex feedback_mutex_;
+        uint64_t command_sequence_{0};
+        uint64_t consumed_command_sequence_{0};
+
         // 后台读取线程管理
         std::thread reading_thread_;
         std::atomic<bool> reading_thread_active_{false};
         std::atomic<bool> reading_thread_stop_{false};
-        std::atomic<int> loop_interval_ms_{50}; // 动态循环间隔（默认50ms，对应20Hz）
+        std::atomic<int64_t> communication_period_ns_{50000000}; // default until first read()
         std::atomic<bool> interval_initialized_{false}; // 是否已初始化间隔
         std::atomic<bool> initial_position_read_{false}; // 是否已读取初始位置（避免启动时跳变）
 
@@ -193,4 +210,3 @@ namespace modbus_ros2_control
         void backgroundReadingLoop();
     };
 } // namespace modbus_ros2_control
-

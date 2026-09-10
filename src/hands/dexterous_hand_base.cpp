@@ -161,29 +161,31 @@ namespace modbus_ros2_control
 
     void DexterousHandBase::updateBackgroundReadingInterval(const rclcpp::Duration& period)
     {
-        if (interval_initialized_)
-        {
-            return; // 只设置一次
-        }
+        const int64_t period_ns = period.nanoseconds();
+        if (period_ns <= 0) return;
 
-        // 将周期转换为毫秒
-        int period_ms = static_cast<int>(period.seconds() * 1000.0);
-        
-        // 确保间隔至少为10ms
-        if (period_ms < 10)
-        {
-            period_ms = 10;
-        }
-
-        loop_interval_ms_ = period_ms;
-        interval_initialized_ = true;
+        communication_period_ns_.store(period_ns);
+        if (interval_initialized_.exchange(true)) return;
 
         RCLCPP_INFO(
             logger_,
-            "Background reading thread configured: reading hand joint status every %d ms (%.1f Hz)",
-            period_ms,
-            1000.0 / period_ms
+            "Background communication period configured: %.3f ms (%.1f Hz)",
+            period_ns / 1000000.0,
+            1.0e9 / static_cast<double>(period_ns)
         );
+    }
+
+    void DexterousHandBase::publishCommands()
+    {
+        std::lock_guard<std::mutex> lock(command_mutex_);
+        communication_commands_ = position_commands_;
+        ++command_sequence_;
+    }
+
+    void DexterousHandBase::publishFeedbackToStateInterfaces()
+    {
+        std::lock_guard<std::mutex> lock(feedback_mutex_);
+        positions_ = communication_positions_;
     }
 
     void DexterousHandBase::backgroundReadingLoop()
@@ -194,45 +196,16 @@ namespace modbus_ros2_control
         {
             auto loop_start = std::chrono::steady_clock::now();
 
-            // 定时读取手关节状态
-            if (initialized_)
-            {
-                readStatus();
-                // After first successful read, mark initial position as read
-                if (!initial_position_read_.load())
-                {
-                    initial_position_read_ = true;
-                    RCLCPP_INFO(logger_, "Initial position read in background thread. Commands will now be written.");
-                }
-            }
-
-            // 写入命令 - 只有在已读取初始位置后才写入，避免启动时跳变
-            if (initialized_ && initial_position_read_.load())
-            {
-                writeCommand();
-            }
-            else if (initialized_ && !initial_position_read_.load())
-            {
-                // Still waiting for initial position read
-                RCLCPP_DEBUG_THROTTLE(
-                    logger_,
-                    *clock_,
-                    1000,
-                    "Waiting for initial position read before writing commands..."
-                );
-            }
+            // One thread owns the RTU bus. A changed command is written before feedback
+            // is requested; stale intermediate CM commands are intentionally overwritten.
+            if (initialized_ && initial_position_read_.load()) writeCommand();
+            if (initialized_ && readStatus()) initial_position_read_ = true;
 
             // 计算循环时间并休眠
-            auto loop_end = std::chrono::steady_clock::now();
-            auto loop_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                loop_end - loop_start
-            ).count();
-
-            int sleep_ms = loop_interval_ms_ - static_cast<int>(loop_elapsed);
-            if (sleep_ms > 0)
-            {
-                std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
-            }
+            const auto period = std::chrono::nanoseconds(communication_period_ns_.load());
+            const auto deadline = loop_start + period;
+            const auto loop_end = std::chrono::steady_clock::now();
+            if (deadline > loop_end) std::this_thread::sleep_until(deadline);
             else
             {
                 // 循环时间超过预期，记录警告
@@ -240,9 +213,9 @@ namespace modbus_ros2_control
                     logger_,
                     *clock_,
                     5000,
-                    "Background reading loop is slower than expected: %ld ms (expected: %d ms)",
-                    loop_elapsed,
-                    loop_interval_ms_.load()
+                    "Background communication loop missed its %.3f ms period (elapsed %.3f ms)",
+                    std::chrono::duration<double, std::milli>(period).count(),
+                    std::chrono::duration<double, std::milli>(loop_end - loop_start).count()
                 );
             }
         }
@@ -250,4 +223,3 @@ namespace modbus_ros2_control
         RCLCPP_INFO(logger_, "Background reading loop stopped");
     }
 } // namespace modbus_ros2_control
-

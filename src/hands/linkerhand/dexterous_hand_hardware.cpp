@@ -88,8 +88,10 @@ namespace modbus_ros2_control
             modbus_slave_id_,
             ModbusConfig::DexterousHand::DEFAULT_PARITY,        // 无校验 'N'
             ModbusConfig::DexterousHand::DEFAULT_DATA_BITS,    // 数据位8
-            ModbusConfig::DexterousHand::DEFAULT_STOP_BITS     // 停止位1
+            ModbusConfig::DexterousHand::DEFAULT_STOP_BITS,    // 停止位1
+            true                                                // FTDI latency_timer -> 1 ms when supported
         );
+        modbus_communicator_->setTimeouts(response_timeout_ms_, byte_timeout_ms_);
 
         // Determine product type from hand_type parameter or joint count
         // Default: O7 for 7 joints, O6 for 6 joints (can be overridden by hand_type parameter)
@@ -161,6 +163,55 @@ namespace modbus_ros2_control
                 );
             }
         }
+
+        tool_torque_parameter_name_ = hand_side_ == "left" ?
+            "left_tool_torque" : "right_tool_torque";
+        tool_velocity_parameter_name_ = hand_side_ == "left" ?
+            "left_tool_velocity" : "right_tool_velocity";
+        const auto node = get_node();
+        if (!node->has_parameter(tool_torque_parameter_name_))
+        {
+            node->declare_parameter<double>(tool_torque_parameter_name_, 1.0);
+        }
+        if (!node->has_parameter(tool_velocity_parameter_name_))
+        {
+            node->declare_parameter<double>(tool_velocity_parameter_name_, 1.0);
+        }
+        tool_torque_.store(node->get_parameter(tool_torque_parameter_name_).as_double());
+        tool_velocity_.store(node->get_parameter(tool_velocity_parameter_name_).as_double());
+        if (tool_torque_.load() < 0.0 || tool_torque_.load() > 1.0 ||
+            tool_velocity_.load() < 0.0 || tool_velocity_.load() > 1.0)
+        {
+            RCLCPP_ERROR(get_node()->get_logger(), "LinkerHand tool torque/velocity must be in [0, 1]");
+            return hardware_interface::CallbackReturn::ERROR;
+        }
+        hand_->setToolRatios(tool_torque_.load(), tool_velocity_.load());
+        parameter_callback_handle_ = node->add_on_set_parameters_callback(
+            [this](const std::vector<rclcpp::Parameter>& parameters)
+            {
+                rcl_interfaces::msg::SetParametersResult result;
+                result.successful = true;
+                double torque = tool_torque_.load();
+                double velocity = tool_velocity_.load();
+                for (const auto& parameter : parameters)
+                {
+                    if (parameter.get_name() != tool_torque_parameter_name_ &&
+                        parameter.get_name() != tool_velocity_parameter_name_) continue;
+                    if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE ||
+                        parameter.as_double() < 0.0 || parameter.as_double() > 1.0)
+                    {
+                        result.successful = false;
+                        result.reason = parameter.get_name() + " must be a double in [0, 1]";
+                        return result;
+                    }
+                    if (parameter.get_name() == tool_torque_parameter_name_) torque = parameter.as_double();
+                    else velocity = parameter.as_double();
+                }
+                tool_torque_.store(torque);
+                tool_velocity_.store(velocity);
+                if (hand_) hand_->setToolRatios(torque, velocity);
+                return result;
+            });
 
         RCLCPP_INFO(
             get_node()->get_logger(),
@@ -238,7 +289,7 @@ namespace modbus_ros2_control
         RCLCPP_INFO(get_node()->get_logger(), "✅ Modbus connected");
 
         // 初始化灵巧手
-        // 使用保存的硬件参数（包含max_speed_ratio等所有参数）
+        // 使用保存的硬件参数（包含设备力矩/速度比例等参数）
         // 关节限位从ModbusConfig中读取（参考Jodell RG75的实现方式）
         if (!hand_->initialize(
             modbus_communicator_.get(),
@@ -254,35 +305,6 @@ namespace modbus_ros2_control
         }
 
         RCLCPP_INFO(get_node()->get_logger(), "✅ Dexterous hand initialized");
-
-        // 再次读取位置并同步命令接口（确保命令接口值与实际位置一致）
-        // 这很重要，因为控制器可能在on_activate时设置了默认命令值
-        RCLCPP_INFO(get_node()->get_logger(), "Synchronizing command interfaces with actual positions...");
-        if (hand_->readStatus())
-        {
-            // 同步命令接口：将命令位置设置为当前实际位置
-            for (size_t i = 0; i < hand_->getJointNames().size(); ++i)
-            {
-                double* cmd_ptr = hand_->getPositionCommandPtr(i);
-                double* pos_ptr = hand_->getPositionPtr(i);
-                if (cmd_ptr && pos_ptr)
-                {
-                    *cmd_ptr = *pos_ptr;
-                    RCLCPP_DEBUG(
-                        get_node()->get_logger(),
-                        "Synchronized joint %s: command = %.4f (from position %.4f)",
-                        hand_->getJointNames()[i].c_str(),
-                        *cmd_ptr,
-                        *pos_ptr
-                    );
-                }
-            }
-            RCLCPP_INFO(get_node()->get_logger(), "✅ Command interfaces synchronized with actual positions");
-        }
-        else
-        {
-            RCLCPP_WARN(get_node()->get_logger(), "Failed to read positions for synchronization");
-        }
 
         // 启动后台读取线程
         hand_->startBackgroundReading();
@@ -355,6 +377,8 @@ namespace modbus_ros2_control
             hand_->updateBackgroundReadingInterval(period);
         }
 
+        hand_->publishFeedbackToStateInterfaces();
+
         // 检查后台读取线程是否在运行
         if (!hand_->isBackgroundReadingActive())
         {
@@ -379,7 +403,9 @@ namespace modbus_ros2_control
             return hardware_interface::return_type::ERROR;
         }
 
-        // 写入操作由后台线程处理，这里不需要执行任何操作
+        // Publish one coherent command snapshot. The background thread keeps only
+        // the newest snapshot and performs write-before-read RTU communication.
+        hand_->publishCommands();
         return hardware_interface::return_type::OK;
     }
 
@@ -415,6 +441,21 @@ namespace modbus_ros2_control
 
         // 读取串口配置
         serial_port_ = get_param("serial_port", "/dev/ttyUSB0");
+        try
+        {
+            response_timeout_ms_ = std::stoi(get_param("response_timeout_ms", "20"));
+            byte_timeout_ms_ = std::stoi(get_param("byte_timeout_ms", "5"));
+            if (response_timeout_ms_ <= 0 || byte_timeout_ms_ <= 0)
+            {
+                throw std::out_of_range("timeouts must be positive");
+            }
+        }
+        catch (const std::exception& e)
+        {
+            RCLCPP_ERROR(get_node()->get_logger(), "Invalid LinkerHand timeout parameter: %s", e.what());
+            response_timeout_ms_ = 20;
+            byte_timeout_ms_ = 5;
+        }
         
         // 波特率固定为115200，不支持修改
         // 其他串口参数也固定：停止位1, 数据位8, 校验位N
