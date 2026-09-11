@@ -68,7 +68,7 @@ private:
   static constexpr uint16_t kDisabledControlMode = 0;
   static constexpr uint16_t kPositionMode = 3;
   static constexpr double kMaxVelocityRadPerSec = 30.0;
-  static constexpr uint16_t kMaxTorqueLimit = 300;
+  static constexpr uint16_t kMaxTorqueLimit = 400;
 
   void load_parameters();
   void declare_tool_parameters();
@@ -79,6 +79,7 @@ private:
   bool open_serial();
   void close_serial();
   bool configure_serial();
+  void configure_ftdi_latency_timer();
   void start_background_thread();
   void stop_background_thread();
   void background_loop();
@@ -122,7 +123,7 @@ private:
   bool require_initial_feedback_ = true;
   int feedback_timeout_ms_ = 50;
   double command_deadband_rad_ = 0.001;
-  int16_t kp_ = 100;
+  int16_t kp_ = 200;
   int16_t ki_ = 0;
   int16_t kd_ = 0;
   uint16_t torque_limit_ = kMaxTorqueLimit;
