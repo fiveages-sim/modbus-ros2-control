@@ -79,7 +79,6 @@ private:
   bool open_serial();
   void close_serial();
   bool configure_serial();
-  void configure_ftdi_latency_timer();
   void start_background_thread();
   void stop_background_thread();
   void background_loop();

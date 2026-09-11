@@ -20,6 +20,7 @@ public:
      * @param parity 校验位（'N'=无校验, 'E'=偶校验, 'O'=奇校验）
      * @param data_bits 数据位（通常为 8）
      * @param stop_bits 停止位（通常为 1）
+     * @param configure_low_latency 默认尝试将支持的 USB 串口 latency_timer 设为 1 ms
      */
     ModbusRtuCommunicator(
         const std::string& serial_port,
@@ -28,7 +29,7 @@ public:
         char parity = 'N',
         int data_bits = 8,
         int stop_bits = 1,
-        bool configure_low_latency = false
+        bool configure_low_latency = true
     );
 
     /**
@@ -130,8 +131,6 @@ public:
     int getSlaveId() const { return slave_id_; }
 
 private:
-    void configureFtdiLatencyTimer();
-
     std::string serial_port_;
     uint32_t baudrate_;
     int slave_id_;

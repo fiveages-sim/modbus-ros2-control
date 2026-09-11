@@ -39,6 +39,7 @@ add_library(
         ${PROJECT_NAME}
         SHARED
         src/communicator/modbus_rtu_communicator.cpp
+        src/communicator/usb_serial_latency.cpp
         src/grippers/modbus_gripper_base.cpp
         src/grippers/changingtek_gripper.cpp
         src/grippers/jodell_gripper.cpp

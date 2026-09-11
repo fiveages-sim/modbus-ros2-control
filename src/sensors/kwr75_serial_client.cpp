@@ -1,4 +1,5 @@
 #include "modbus_ros2_control/sensors/kwr75_serial_client.h"
+#include "modbus_ros2_control/communicator/usb_serial_latency.h"
 
 #include <algorithm>
 #include <chrono>
@@ -133,6 +134,7 @@ bool Kwr75SerialClient::connect()
     return false;
   }
 
+  configure_usb_serial_latency(serial_port_);
   tcflush(serial_fd_, TCIOFLUSH);
   streaming_started_ = false;
   return true;

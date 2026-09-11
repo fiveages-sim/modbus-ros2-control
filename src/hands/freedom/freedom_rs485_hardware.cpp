@@ -1,4 +1,5 @@
 #include "modbus_ros2_control/hands/freedom/freedom_rs485_hardware.h"
+#include "modbus_ros2_control/communicator/usb_serial_latency.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -396,6 +397,7 @@ bool FreedomRS485Hardware::open_serial()
     return false;
   }
 
+  configure_usb_serial_latency(serial_port_);
   tcflush(serial_fd_, TCIOFLUSH);
   return true;
 }

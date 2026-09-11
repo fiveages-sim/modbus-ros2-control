@@ -1,8 +1,7 @@
 #include "modbus_ros2_control/communicator/modbus_rtu_communicator.h"
+#include "modbus_ros2_control/communicator/usb_serial_latency.h"
 #include <cerrno>
 #include <cstring>
-#include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <sys/time.h>
 
@@ -43,8 +42,6 @@ bool ModbusRtuCommunicator::connect() {
     if (connected_) {
         return true;
     }
-
-    if (configure_low_latency_) configureFtdiLatencyTimer();
 
     // 创建 Modbus RTU 上下文
     modbus_ctx_ = modbus_new_rtu(
@@ -103,55 +100,11 @@ bool ModbusRtuCommunicator::connect() {
         return false;
     }
 
+    if (configure_low_latency_) configure_usb_serial_latency(serial_port_);
+
     connected_ = true;
     last_error_.clear();
     return true;
-}
-
-void ModbusRtuCommunicator::configureFtdiLatencyTimer()
-{
-    namespace fs = std::filesystem;
-    std::error_code ec;
-    const fs::path resolved_port = fs::canonical(serial_port_, ec);
-    if (ec) {
-        std::clog << "Modbus RTU: cannot resolve serial port " << serial_port_
-                  << " while checking FTDI latency_timer: " << ec.message() << '\n';
-        return;
-    }
-
-    const fs::path latency_path = fs::path("/sys/bus/usb-serial/devices") /
-                                  resolved_port.filename() / "latency_timer";
-    if (!fs::exists(latency_path, ec) || ec) return;
-
-    int previous = -1;
-    {
-        std::ifstream input(latency_path);
-        input >> previous;
-    }
-    if (previous == 1) return;
-
-    {
-        std::ofstream output(latency_path);
-        if (!output || !(output << 1 << '\n')) {
-            std::cerr << "Modbus RTU: unable to set " << latency_path
-                      << " to 1 ms; continuing with latency_timer=" << previous
-                      << " ms (check sysfs/udev permissions)\n";
-            return;
-        }
-    }
-
-    int verified = -1;
-    {
-        std::ifstream input(latency_path);
-        input >> verified;
-    }
-    if (verified == 1) {
-        std::clog << "Modbus RTU: FTDI latency_timer changed from " << previous
-                  << " ms to 1 ms for " << resolved_port << '\n';
-    } else {
-        std::cerr << "Modbus RTU: FTDI latency_timer verification failed for "
-                  << resolved_port << " (read back " << verified << " ms)\n";
-    }
 }
 
 void ModbusRtuCommunicator::disconnect() {

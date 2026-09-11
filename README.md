@@ -185,6 +185,10 @@ modbus_ros2_control/
 | | `startup_delay_ms` | `50` | 发送启动命令后等待首帧（ms） |
 | | `warmup_attempts` | `20` | 激活时握手重试次数 |
 
+所有本包直接管理的 USB-RS485 串口在连接时默认尝试将 `latency_timer` 设置为 **1 ms**，并读回验证。该逻辑共用同一实现，覆盖 Modbus RTU 路径（LinkerHand、Inspire、TheoHand、ChangingTek、Jodell 等）、Freedom、XHand1，以及 KWR75 串口传感器；重新连接时也会执行。
+
+支持 `/dev/serial/by-id/...` 等符号链接。没有 `latency_timer` 属性的适配器和原生串口会跳过；无 sysfs 写权限时告警并继续通信，不会自动提权。若普通用户需要在重新插拔后自动生效，应配置系统 udev 权限或由系统设置该属性。此设置调整的是 USB 接收缓冲，不改变波特率、协议超时或设备内部控制频率。
+
 ## 5. 位置单位
 
 | 末端 | ROS2 Control 接口 | 设备协议 |
