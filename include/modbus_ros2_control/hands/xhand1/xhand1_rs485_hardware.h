@@ -128,7 +128,7 @@ private:
   uint16_t torque_limit_ = kMaxTorqueLimit;
   uint16_t control_mode_ = kPositionMode;
   double tool_torque_scale_ = 1.0;
-  double tool_velocity_scale_ = 1.0;
+  double tool_velocity_scale_ = 0.0;
   int serial_fd_ = -1;
   bool command_sent_ = false;
   bool pending_command_valid_ = false;
