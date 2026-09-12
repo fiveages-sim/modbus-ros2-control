@@ -169,9 +169,10 @@ modbus_ros2_control/
 | **XHand1RS485Hardware** | `serial_port` | `/dev/ttyUSB0` | |
 | | `baudrate` | `3000000` | |
 | | `hand_id` / `host_id` | `0` / `0xFE` | |
-| | `kp` / `ki` / `kd` | `200` / `0` / `0` | 随每帧下发 |
-| | `torque_limit` | `400` | 基础力矩上限，范围 `[0, 400]` |
-| | `tool_torque` | `1.0` | 力矩比例 ratio，范围 `[0, 1]`；下发值为 `round(torque_limit × ratio)`，默认即 `round(400 × ratio)` |
+| | `kp` / `ki` / `kd` | `100` / `0` / `0` | 随每帧下发 |
+| | `torque_limit` | `300` | 基础力矩上限，范围 `[0, 300]` |
+| | `tool_torque` | `1.0` | 力矩比例 ratio，范围 `[0, 1]`；下发值为 `round(torque_limit × ratio)`，默认即 `round(300 × ratio)` |
+| | `tool_velocity` | `1.0` | 速度比例：`0 < ratio <= 1` 按比例限速；有限值 `ratio <= 0` 不限速，直接下发目标位置（仍保留关节位置限位）。负数内部归一为 0；支持运行时修改 |
 | | FTDI USB 缓冲定时器 | `1 ms` | 打开串口时自动设置并读回验证，支持串口符号链接；无该属性时跳过，无写权限时告警并继续 |
 | **TheoHandModbusHardware** | `serial_port` | `/dev/ttyUSB0` | |
 | | `baudrate` | `115200` | 协议 6.1：RS485 115200 8N1 |

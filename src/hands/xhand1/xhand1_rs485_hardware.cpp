@@ -481,10 +481,12 @@ rcl_interfaces::msg::SetParametersResult XHand1RS485Hardware::on_tool_parameters
       parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER
         ? static_cast<double>(parameter.as_int())
         : parameter.as_double();
-    if (value < 0.0 || value > 1.0)
+    if (!std::isfinite(value) || value > 1.0 || (name == "tool_torque" && value < 0.0))
     {
       result.successful = false;
-      result.reason = name + " must be in [0.0, 1.0]";
+      result.reason = name == "tool_torque"
+        ? "tool_torque must be finite and in [0.0, 1.0]"
+        : "tool_velocity must be finite and <= 1.0 (<= 0 disables speed limiting)";
       return result;
     }
 
@@ -757,6 +759,12 @@ XHand1RS485Hardware::compute_limited_command_positions(
     const double target = std::clamp(target_positions[i], lower_limits_[i], upper_limits_[i]);
     const double current = feedback_positions[i];
     const double velocity_scale = std::clamp(hw_velocity_scales_[i], 0.0, 1.0);
+    // Zero also represents negative ratios normalized at parameter ingestion.
+    if (velocity_scale <= 0.0)
+    {
+      limited_positions[i] = target;
+      continue;
+    }
     const double max_step =
       kMaxVelocityRadPerSec * velocity_scale * interpolation_period_seconds;
     const double delta = target - current;
