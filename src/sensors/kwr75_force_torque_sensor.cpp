@@ -199,19 +199,19 @@ hardware_interface::return_type Kwr75ForceTorqueSensor::read(
 
   if (!client_->read_wrench(wrench_state_))
   {
-    wrench_state_.fill(0.0);
     ++consecutive_read_failures_;
     if (consecutive_read_failures_ >= max_read_failures_)
     {
+      wrench_state_.fill(0.0);
       const std::string sample = client_->last_io_sample_hex();
       std::string reason =
         "KWR75 传感器 '" + sensor_name_ + "' 连续 " + std::to_string(consecutive_read_failures_) +
-        " 次读取失败（" + serial_port_ + "），已停止串口读取，力/力矩输出保持为 0";
+        " 次读取失败（" + serial_port_ + "），力/力矩暂时输出 0，继续尝试收帧";
       if (!sample.empty())
       {
         reason += "，最近收到: [" + sample + "]";
       }
-      stop_io_and_zero(reason);
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "%s", reason.c_str());
     }
   }
   else
@@ -281,9 +281,9 @@ void Kwr75ForceTorqueSensor::load_parameters()
   read_timeout_ms_ = parse_int(
     get_param("read_timeout_ms", std::to_string(read_timeout_ms_)),
     read_timeout_ms_);
-  if (read_timeout_ms_ < 1)
+  if (read_timeout_ms_ < 0)
   {
-    read_timeout_ms_ = 1;
+    read_timeout_ms_ = 0;
   }
   startup_delay_ms_ = parse_int(
     get_param("startup_delay_ms", std::to_string(startup_delay_ms_)),

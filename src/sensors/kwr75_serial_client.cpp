@@ -148,6 +148,7 @@ void Kwr75SerialClient::disconnect()
     serial_fd_ = -1;
   }
   streaming_started_ = false;
+  receive_buffer_.clear();
 }
 
 bool Kwr75SerialClient::start_capture()
@@ -322,20 +323,20 @@ bool Kwr75SerialClient::read_latest_frame(
   std::array<uint8_t, kFrameLength>& frame,
   int timeout_ms)
 {
-  std::vector<uint8_t> buffer;
+  auto& buffer = receive_buffer_;
   buffer.reserve(kFrameLength * 8);
   const auto deadline =
     std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
 
   bool found = false;
-  while (std::chrono::steady_clock::now() <= deadline)
+  do
   {
     fd_set read_set;
     FD_ZERO(&read_set);
     FD_SET(serial_fd_, &read_set);
 
     timeval timeout {};
-    timeout.tv_usec = 1000;
+    timeout.tv_usec = timeout_ms > 0 ? 1000 : 0;
     const auto select_result = select(serial_fd_ + 1, &read_set, nullptr, nullptr, &timeout);
     if (select_result < 0)
     {
@@ -348,9 +349,9 @@ bool Kwr75SerialClient::read_latest_frame(
 
     if (select_result == 0)
     {
-      if (found)
+      if (timeout_ms <= 0)
       {
-        return true;
+        break;
       }
       continue;
     }
@@ -373,6 +374,7 @@ bool Kwr75SerialClient::read_latest_frame(
 
     buffer.insert(buffer.end(), chunk, chunk + bytes_read);
 
+    std::size_t consumed = 0;
     for (std::size_t start = 0; start + kFrameLength <= buffer.size(); ++start)
     {
       if (!frame_matches(buffer, start, command_code_))
@@ -384,13 +386,20 @@ bool Kwr75SerialClient::read_latest_frame(
         kFrameLength,
         frame.begin());
       found = true;
+      consumed = start + kFrameLength;
+      start += kFrameLength - 1;
+    }
+    if (consumed > 0)
+    {
+      buffer.erase(buffer.begin(), buffer.begin() + static_cast<std::ptrdiff_t>(consumed));
+      return true;
     }
 
     if (buffer.size() > kFrameLength * 8)
     {
       buffer.erase(buffer.begin(), buffer.end() - static_cast<std::ptrdiff_t>(kFrameLength * 2));
     }
-  }
+  } while (std::chrono::steady_clock::now() < deadline);
 
   if (!found)
   {

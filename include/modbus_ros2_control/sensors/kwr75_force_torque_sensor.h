@@ -61,7 +61,7 @@ private:
   bool convert_to_si_ = true;
   double gravity_ = 9.80665;
   int response_timeout_ms_ = 50;
-  int read_timeout_ms_ = 3;
+  int read_timeout_ms_ = 0;
   int startup_delay_ms_ = 50;
   int warmup_attempts_ = 20;
   int max_read_failures_ = 3;

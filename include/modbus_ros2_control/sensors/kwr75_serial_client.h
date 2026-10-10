@@ -22,7 +22,7 @@ public:
     bool convert_to_si = true,
     double gravity = 9.80665,
     int response_timeout_ms = 50,
-    int read_timeout_ms = 3,
+    int read_timeout_ms = 0,
     int startup_delay_ms = 50,
     int warmup_attempts = 20);
 
@@ -59,6 +59,7 @@ private:
   bool streaming_started_ = false;
   int serial_fd_ = -1;
   std::string last_io_sample_hex_;
+  std::vector<uint8_t> receive_buffer_;
 };
 
 }  // namespace modbus_ros2_control
