@@ -137,18 +137,45 @@ bool Kwr75SerialClient::connect()
   configure_usb_serial_latency(serial_port_);
   tcflush(serial_fd_, TCIOFLUSH);
   streaming_started_ = false;
+  {
+    std::lock_guard<std::mutex> lock(frame_mutex_);
+    have_frame_ = false;
+    frame_seq_ = 0;
+  }
   return true;
 }
 
 void Kwr75SerialClient::disconnect()
 {
+  // 必须先停线程再关 fd，否则线程可能在 select() 里拿到已关闭的 fd。
+  stop_reader();
   if (serial_fd_ >= 0)
   {
     ::close(serial_fd_);
     serial_fd_ = -1;
   }
   streaming_started_ = false;
-  receive_buffer_.clear();
+  {
+    std::lock_guard<std::mutex> lock(frame_mutex_);
+    have_frame_ = false;
+  }
+}
+
+void Kwr75SerialClient::stop_reader()
+{
+  reader_running_.store(false, std::memory_order_relaxed);
+  if (reader_thread_.joinable())
+  {
+    if (reader_thread_.get_id() == std::this_thread::get_id())
+    {
+      reader_thread_.detach();
+    }
+    else
+    {
+      reader_thread_.join();
+    }
+  }
+  frame_cv_.notify_all();
 }
 
 bool Kwr75SerialClient::start_capture()
@@ -169,7 +196,107 @@ bool Kwr75SerialClient::start_capture()
   }
 
   streaming_started_ = true;
+  if (!reader_thread_.joinable())
+  {
+    reader_running_.store(true, std::memory_order_relaxed);
+    reader_thread_ = std::thread(&Kwr75SerialClient::reader_loop, this);
+  }
   return true;
+}
+
+void Kwr75SerialClient::reader_loop()
+{
+  std::vector<uint8_t> buffer;
+  buffer.reserve(kFrameLength * 4);
+
+  const int fd = serial_fd_;
+  auto last_bytes_at = std::chrono::steady_clock::now();
+
+  while (reader_running_.load(std::memory_order_relaxed))
+  {
+    fd_set read_set;
+    FD_ZERO(&read_set);
+    FD_SET(fd, &read_set);
+
+    timeval timeout {};
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 2000;  // 2 ms：无数据时也让出 CPU，有数据时立刻返回
+    const auto select_result = select(fd + 1, &read_set, nullptr, nullptr, &timeout);
+    if (select_result < 0)
+    {
+      if (errno == EINTR)
+      {
+        continue;
+      }
+      break;
+    }
+
+    if (select_result == 0)
+    {
+      // 100 ms 一点数据都没有：传感器可能是「请求-应答」模式，补发一次启动命令。
+      const auto idle_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - last_bytes_at).count();
+      if (idle_ms > 100)
+      {
+        send_start_command();
+        last_bytes_at = std::chrono::steady_clock::now();
+      }
+      continue;
+    }
+
+    uint8_t chunk[256];
+    const auto bytes_read = ::read(fd, chunk, sizeof(chunk));
+    if (bytes_read < 0)
+    {
+      if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+      {
+        continue;
+      }
+      break;
+    }
+    if (bytes_read == 0)
+    {
+      continue;
+    }
+
+    last_bytes_at = std::chrono::steady_clock::now();
+    buffer.insert(buffer.end(), chunk, chunk + bytes_read);
+
+    std::size_t consumed = 0;
+    std::size_t start = 0;
+    while (start + kFrameLength <= buffer.size())
+    {
+      if (!frame_matches(buffer, start, command_code_))
+      {
+        ++start;
+        continue;
+      }
+      {
+        std::lock_guard<std::mutex> lock(frame_mutex_);
+        std::copy_n(
+          buffer.begin() + static_cast<std::ptrdiff_t>(start),
+          kFrameLength,
+          latest_frame_.begin());
+        latest_frame_stamp_ = std::chrono::steady_clock::now();
+        have_frame_ = true;
+        ++frame_seq_;
+      }
+      frame_cv_.notify_all();
+      start += kFrameLength;
+      consumed = start;
+    }
+
+    if (consumed > 0)
+    {
+      buffer.erase(buffer.begin(), buffer.begin() + static_cast<std::ptrdiff_t>(consumed));
+    }
+    if (buffer.size() > kFrameLength * 8)
+    {
+      // 长时间对不上帧（波特率/协议不符），丢掉重来，别让缓冲区无限长。
+      record_io_sample(buffer);
+      buffer.clear();
+    }
+  }
 }
 
 void Kwr75SerialClient::record_io_sample(const std::vector<uint8_t>& buffer)
@@ -194,6 +321,7 @@ void Kwr75SerialClient::record_io_sample(const std::vector<uint8_t>& buffer)
   {
     oss << " ...";
   }
+  std::lock_guard<std::mutex> lock(io_mutex_);
   last_io_sample_hex_ = oss.str();
 }
 
@@ -319,94 +447,44 @@ bool Kwr75SerialClient::send_start_command()
   return total_written == sizeof(request);
 }
 
+// 从后台线程的缓存里取最新一帧。timeout_ms 只是「等一帧新数据」的上限：
+//   - timeout_ms == 0 → 立刻返回当前缓存（read() 走这条路径，不占用实时环时间）
+//   - timeout_ms  > 0 → 最多等这么久（warmup / 诊断用）
+// 拿不到新帧但缓存还没过期时，返回旧帧而不是 false —— 单帧丢失不应该把
+// 力/力矩置 0（那会变成一次假的力阶跃，直接踢到导纳环）。
 bool Kwr75SerialClient::read_latest_frame(
   std::array<uint8_t, kFrameLength>& frame,
   int timeout_ms)
 {
-  auto& buffer = receive_buffer_;
-  buffer.reserve(kFrameLength * 8);
+  std::unique_lock<std::mutex> lock(frame_mutex_);
+  const uint64_t seq_at_entry = frame_seq_;
   const auto deadline =
-    std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    std::chrono::steady_clock::now() + std::chrono::milliseconds(std::max(timeout_ms, 0));
 
-  bool found = false;
-  do
+  if (timeout_ms > 0)
   {
-    fd_set read_set;
-    FD_ZERO(&read_set);
-    FD_SET(serial_fd_, &read_set);
-
-    timeval timeout {};
-    timeout.tv_usec = timeout_ms > 0 ? 1000 : 0;
-    const auto select_result = select(serial_fd_ + 1, &read_set, nullptr, nullptr, &timeout);
-    if (select_result < 0)
-    {
-      if (errno == EINTR)
-      {
-        continue;
-      }
-      return false;
-    }
-
-    if (select_result == 0)
-    {
-      if (timeout_ms <= 0)
-      {
-        break;
-      }
-      continue;
-    }
-
-    uint8_t chunk[256];
-    const auto bytes_read = ::read(serial_fd_, chunk, sizeof(chunk));
-    if (bytes_read < 0)
-    {
-      if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
-      {
-        continue;
-      }
-      return false;
-    }
-
-    if (bytes_read == 0)
-    {
-      continue;
-    }
-
-    buffer.insert(buffer.end(), chunk, chunk + bytes_read);
-
-    std::size_t consumed = 0;
-    for (std::size_t start = 0; start + kFrameLength <= buffer.size(); ++start)
-    {
-      if (!frame_matches(buffer, start, command_code_))
-      {
-        continue;
-      }
-      std::copy_n(
-        buffer.begin() + static_cast<std::ptrdiff_t>(start),
-        kFrameLength,
-        frame.begin());
-      found = true;
-      consumed = start + kFrameLength;
-      start += kFrameLength - 1;
-    }
-    if (consumed > 0)
-    {
-      buffer.erase(buffer.begin(), buffer.begin() + static_cast<std::ptrdiff_t>(consumed));
-      return true;
-    }
-
-    if (buffer.size() > kFrameLength * 8)
-    {
-      buffer.erase(buffer.begin(), buffer.end() - static_cast<std::ptrdiff_t>(kFrameLength * 2));
-    }
-  } while (std::chrono::steady_clock::now() < deadline);
-
-  if (!found)
-  {
-    record_io_sample(buffer);
+    frame_cv_.wait_until(lock, deadline, [this, seq_at_entry] {
+      return !reader_running_.load(std::memory_order_relaxed) || frame_seq_ != seq_at_entry;
+    });
   }
 
-  return found;
+  if (!have_frame_)
+  {
+    return false;
+  }
+
+  if (frame_seq_ == seq_at_entry)
+  {
+    const auto age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - latest_frame_stamp_).count();
+    if (age_ms > stale_timeout_ms_)
+    {
+      return false;
+    }
+  }
+
+  frame = latest_frame_;
+  return true;
 }
 
 float Kwr75SerialClient::decode_wire_float(const uint8_t* wire_bytes)

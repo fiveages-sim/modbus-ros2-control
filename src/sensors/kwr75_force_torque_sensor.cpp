@@ -197,27 +197,65 @@ hardware_interface::return_type Kwr75ForceTorqueSensor::read(
     return hardware_interface::return_type::OK;
   }
 
-  if (!client_->read_wrench(wrench_state_))
+  // timeout_ms = 0：实时环里绝不阻塞。串口由 Kwr75SerialClient 的后台线程持续
+  // 排空并缓存最新帧，这里只取当前缓存（28 字节帧在 115200 下需要 2.43 ms 传输，
+  // 同步等待必然超过 500 Hz 的 2 ms 周期预算）。
+  if (!client_->read_wrench(wrench_state_, 0))
   {
+    wrench_state_.fill(0.0);
     ++consecutive_read_failures_;
     if (consecutive_read_failures_ >= max_read_failures_)
     {
-      wrench_state_.fill(0.0);
       const std::string sample = client_->last_io_sample_hex();
       std::string reason =
         "KWR75 传感器 '" + sensor_name_ + "' 连续 " + std::to_string(consecutive_read_failures_) +
-        " 次读取失败（" + serial_port_ + "），力/力矩暂时输出 0，继续尝试收帧";
+        " 次读取失败（" + serial_port_ + "），已停止串口读取，力/力矩输出保持为 0";
       if (!sample.empty())
       {
         reason += "，最近收到: [" + sample + "]";
       }
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "%s", reason.c_str());
+      stop_io_and_zero(reason);
     }
   }
   else
   {
     consecutive_read_failures_ = 0;
-    has_valid_sample_.store(true);
+
+    // ── 单帧跳变抑制（EMI / 错帧）──
+    // 现场实测会偶发 +15 N / +60 N 的孤立跳变（force-spike）：控制器拿到这种跳变后
+    // 导纳会给出 v = 60/D 的速度（D=300 时 0.2 m/s），被钳到 force_vmax 后表现为
+    // 3 cm/s 的猛烈抽动。这里在源头上丢弃「单帧跳变超过阈值」的样本，保持上一次
+    // 有效值；连续丢弃超过 5 帧才接受（避免真的阶跃变化被永久挡住）。
+    bool plausible = true;
+    if (have_good_)
+    {
+      for (std::size_t i = 0; i < kAxisCount; ++i)
+      {
+        const double limit = i < 3 ? spike_limit_force_ : spike_limit_torque_;
+        // limit <= 0 → 该轴关闭跳变抑制（真正的一键关掉；之前把阈值钳到 0 会让
+        // “任何变化”都被判为不可信，等于永远开着）。
+        if (limit <= 0.0)
+        {
+          continue;
+        }
+        if (std::abs(wrench_state_[i] - last_good_[i]) > limit)
+        {
+          plausible = false;
+          break;
+        }
+      }
+    }
+    if (plausible || ++rejected_in_a_row_ > 5)
+    {
+      last_good_ = wrench_state_;
+      have_good_ = true;
+      rejected_in_a_row_ = 0;
+      has_valid_sample_.store(true);
+    }
+    else
+    {
+      wrench_state_ = last_good_;   // 丢弃本帧，保持上次有效值
+    }
   }
 
   publish_wrench(time);
@@ -274,6 +312,14 @@ void Kwr75ForceTorqueSensor::load_parameters()
   command_code_ = static_cast<uint8_t>(
     parse_int(get_param("command_code", std::to_string(command_code_)), command_code_));
   convert_to_si_ = parse_bool(get_param("convert_to_si", "true"), convert_to_si_);
+  // 单帧跳变抑制阈值（抗 EMI 尖峰）。≤0 关闭。
+  spike_limit_force_ = std::stod(get_param("spike_limit_force", std::to_string(spike_limit_force_)));
+  spike_limit_torque_ = std::stod(get_param("spike_limit_torque", std::to_string(spike_limit_torque_)));
+  if (spike_limit_force_ < 0.0) spike_limit_force_ = 0.0;
+  if (spike_limit_torque_ < 0.0) spike_limit_torque_ = 0.0;
+  last_good_.fill(0.0);
+  have_good_ = false;
+  rejected_in_a_row_ = 0;
   gravity_ = std::stod(get_param("gravity", std::to_string(gravity_)));
   response_timeout_ms_ = parse_int(
     get_param("response_timeout_ms", std::to_string(response_timeout_ms_)),
@@ -281,9 +327,9 @@ void Kwr75ForceTorqueSensor::load_parameters()
   read_timeout_ms_ = parse_int(
     get_param("read_timeout_ms", std::to_string(read_timeout_ms_)),
     read_timeout_ms_);
-  if (read_timeout_ms_ < 0)
+  if (read_timeout_ms_ < 1)
   {
-    read_timeout_ms_ = 0;
+    read_timeout_ms_ = 1;
   }
   startup_delay_ms_ = parse_int(
     get_param("startup_delay_ms", std::to_string(startup_delay_ms_)),

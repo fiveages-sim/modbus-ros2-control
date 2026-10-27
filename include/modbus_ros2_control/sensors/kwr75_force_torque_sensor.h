@@ -61,12 +61,19 @@ private:
   bool convert_to_si_ = true;
   double gravity_ = 9.80665;
   int response_timeout_ms_ = 50;
-  int read_timeout_ms_ = 0;
+  int read_timeout_ms_ = 3;
   int startup_delay_ms_ = 50;
   int warmup_attempts_ = 20;
   int max_read_failures_ = 3;
   bool zero_mode_ = false;
   int consecutive_read_failures_ = 0;
+  // 单帧跳变抑制（抗 EMI / 错帧）：单轴跳变超过阈值就丢弃本帧，保持上次有效值。
+  // 力 10 N / 力矩 3 Nm：3 cm/s 在 5e4 N/m 硬面上每 5 ms 也只有 7.5 N，正常信号不会触发。
+  double spike_limit_force_ = 10.0;   // [N]
+  double spike_limit_torque_ = 3.0;   // [Nm]
+  std::array<double, kAxisCount> last_good_{};
+  int rejected_in_a_row_ = 0;
+  bool have_good_ = false;
   std::unique_ptr<Kwr75SerialClient> client_;
   rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr wrench_pub_;
   std::atomic<bool> has_valid_sample_{false};
