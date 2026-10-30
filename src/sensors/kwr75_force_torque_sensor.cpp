@@ -266,7 +266,23 @@ void Kwr75ForceTorqueSensor::stop_io_and_zero(const std::string& reason)
 {
   if (!zero_mode_)
   {
-    RCLCPP_WARN(get_logger(), "%s", reason.c_str());
+    // 关断时补一行现场：最后一帧有多旧、收过多少帧、reader 线程是否还活着。
+    // 这三个信息足以区分「USB 停流」「线程已退出」「只是调度抖动」。
+    std::string diag;
+    if (client_)
+    {
+      const long age_ms = client_->last_frame_age_ms();
+      diag = "；最后一帧: " +
+        (age_ms < 0 ? std::string("从未收到") : (std::to_string(age_ms) + " ms 前")) +
+        "，累计帧数: " + std::to_string(client_->frames_received()) +
+        "，reader=" + (client_->reader_running() ? "running" : "stopped");
+      const std::string& why = client_->reader_stop_reason();
+      if (!why.empty())
+      {
+        diag += "（" + why + "）";
+      }
+    }
+    RCLCPP_WARN(get_logger(), "%s%s", reason.c_str(), diag.c_str());
   }
   zero_mode_ = true;
   consecutive_read_failures_ = 0;
